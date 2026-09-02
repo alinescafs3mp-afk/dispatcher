@@ -27,7 +27,7 @@ dev = [
 friday-dispatcher = "dispatcher:main"
 
 [tool.setuptools]
-py-modules = ["dispatcher"]
+py-modules = ["dispatcher", "dispatcher_hardening"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"

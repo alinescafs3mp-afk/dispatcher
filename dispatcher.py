@@ -1299,5 +1299,10 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+# Apply independently auditable safety and protocol hardening.
+from dispatcher_hardening import apply_hardening as _apply_hardening
+_apply_hardening(sys.modules[__name__])
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
