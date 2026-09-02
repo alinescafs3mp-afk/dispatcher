@@ -108,7 +108,6 @@ CREATE TABLE IF NOT EXISTS preferences (
 CREATE INDEX IF NOT EXISTS idx_tasks_mission ON tasks(mission_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_events_mission ON events(mission_id, seq);
 CREATE INDEX IF NOT EXISTS idx_logs_agent ON logs(agent_id, seq);
-CREATE INDEX IF NOT EXISTS idx_chat_channel ON chat(profile, agent_key, seq);
 """
 
 
