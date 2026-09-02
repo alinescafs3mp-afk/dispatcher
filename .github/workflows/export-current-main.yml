@@ -1,23 +1,58 @@
-name: export-current-main
+name: recover-profile-catchup
 
 on:
   push:
     branches:
       - profile-final-catchup
+    paths:
+      - '.github/workflows/export-current-main.yml'
+      - '.catchup-final/**'
 
 permissions:
   contents: read
 
 jobs:
-  export:
+  recover:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Archive exact main source
-        run: git archive --format=tar.gz --output=current-main.tar.gz 7d8ab1907dfa31269dc6fc86137dcd0a5ff82756
-      - uses: actions/upload-artifact@v4
+
+      - name: Reconstruct available payload and diagnostics
+        shell: bash
+        run: |
+          set -uo pipefail
+          cat .catchup-final/payload-*.b64 | tr -d '\n' | base64 --decode > recovered-catchup.patch.gz
+          {
+            echo 'available payload files:'
+            ls -l .catchup-final/payload-*.b64
+            echo
+            echo 'compressed payload:'
+            sha256sum recovered-catchup.patch.gz
+            wc -c recovered-catchup.patch.gz
+            echo
+            echo 'gzip test:'
+            gzip -t recovered-catchup.patch.gz
+            echo "gzip_status=$?"
+          } > recovery-manifest.txt 2>&1
+          gzip -dc recovered-catchup.patch.gz > recovered-catchup.patch 2>> recovery-manifest.txt
+          echo "decompress_status=$?" >> recovery-manifest.txt
+          sha256sum recovered-catchup.patch >> recovery-manifest.txt 2>&1 || true
+          wc -c recovered-catchup.patch >> recovery-manifest.txt 2>&1 || true
+          git reset --hard 7d8ab1907dfa31269dc6fc86137dcd0a5ff82756
+          git clean -fdx -e recovered-catchup.patch -e recovered-catchup.patch.gz -e recovery-manifest.txt
+          git apply --check recovered-catchup.patch >> recovery-manifest.txt 2>&1
+          echo "apply_check_status=$?" >> recovery-manifest.txt
+          git apply --stat recovered-catchup.patch >> recovery-manifest.txt 2>&1 || true
+
+      - name: Upload recovered material
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: current-main-source
-          path: current-main.tar.gz
+          name: recovered-profile-catchup
+          path: |
+            recovered-catchup.patch.gz
+            recovered-catchup.patch
+            recovery-manifest.txt
+          if-no-files-found: error
