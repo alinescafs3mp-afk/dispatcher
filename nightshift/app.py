@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import __version__
 from .config import Settings, load_settings
 from .forensics import ForensicsScanner
 from .orchestrator import NightshiftOrchestrator, OrchestratorError
@@ -80,6 +81,10 @@ async def _safe_warmup(orchestrator: NightshiftOrchestrator) -> None:
         await orchestrator.refresh_quotas()
     except Exception as exc:
         await orchestrator._emit("system.warmup_error", {"phase": "quotas", "error": str(exc)})
+    await orchestrator._emit(
+        "system.warmup_complete",
+        {"profile": orchestrator.profile_id},
+    )
 
 
 async def _quota_loop(orchestrator: NightshiftOrchestrator) -> None:
@@ -96,27 +101,35 @@ async def _quota_loop(orchestrator: NightshiftOrchestrator) -> None:
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved = settings or load_settings()
     static_dir = Path(__file__).with_name("static")
+    background_tasks: set[asyncio.Task[Any]] = set()
+
+    def spawn(coroutine) -> asyncio.Task[Any]:
+        task = asyncio.create_task(coroutine)
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+        return task
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         orchestrator = NightshiftOrchestrator(resolved)
         app.state.orchestrator = orchestrator
-        warmup = asyncio.create_task(_safe_warmup(orchestrator))
-        quota_loop = asyncio.create_task(_quota_loop(orchestrator))
+        app.state.background_tasks = background_tasks
+        spawn(_safe_warmup(orchestrator))
+        spawn(_quota_loop(orchestrator))
         try:
             yield
         finally:
-            warmup.cancel()
-            quota_loop.cancel()
-            with suppress(asyncio.CancelledError):
-                await warmup
-            with suppress(asyncio.CancelledError):
-                await quota_loop
+            tasks = list(background_tasks)
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                with suppress(asyncio.CancelledError):
+                    await asyncio.gather(*tasks, return_exceptions=True)
             await orchestrator.close()
 
     app = FastAPI(
         title="Sol Link Dispatcher",
-        version="0.3.0",
+        version=__version__,
         lifespan=lifespan,
         docs_url="/api/docs",
         redoc_url=None,
@@ -157,13 +170,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.put("/api/profile")
     async def set_profile(request: ProfileRequest) -> dict[str, Any]:
+        before = (orch().profile_id, orch().combat_grok_enabled)
         try:
-            return await orch().set_profile(
+            result = await orch().set_profile(
                 request.profile,
                 combat_grok_enabled=request.combat_grok_enabled,
             )
         except OrchestratorError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        after = (orch().profile_id, orch().combat_grok_enabled)
+        if after != before:
+            spawn(_safe_warmup(orch()))
+        return result
 
     @app.post("/api/doctor")
     async def doctor() -> dict[str, Any]:
@@ -182,13 +200,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/recovery/scan")
     async def recovery_scan(request: ScanRequest) -> dict[str, Any]:
-        runtime = resolved.orchestrator.runtime_path
+        active_settings = orch().settings
+        runtime = active_settings.orchestrator.runtime_path
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
         scan_dir = runtime / "manual-scans" / stamp
         scan_dir.mkdir(parents=True, exist_ok=False)
         if request.include_quotas:
             await orch().refresh_quotas()
-        scanner = ForensicsScanner(resolved, scan_dir, orch().codex_homes)
+        scanner = ForensicsScanner(active_settings, scan_dir, orch().codex_homes)
         report = await asyncio.to_thread(scanner.scan)
         await orch()._emit(
             "recovery.manual_scan_ready",
@@ -300,9 +319,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 {"type": "state.snapshot", "payload": orch().snapshot()}
             )
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                except TimeoutError:
+                    await websocket.send_json(
+                        {
+                            "type": "system.heartbeat",
+                            "payload": {
+                                "sent_at": datetime.now(UTC).isoformat(),
+                                "event_seq": orch().db.latest_event_seq(),
+                            },
+                        }
+                    )
+                    continue
                 await websocket.send_json(event)
-        except (WebSocketDisconnect, RuntimeError):
+        except (WebSocketDisconnect, RuntimeError, OSError):
             pass
         finally:
             await orch().hub.unsubscribe(queue)

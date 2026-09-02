@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sol-link-nightshift"
-version = "0.2.0"
-description = "Subscription-backed emergency orchestrator for Grok Build, Codex Luna, and Codex Spark"
+version = "0.3.0"
+description = "Profile-aware subscription-backed orchestrator for Sol, SolGoodman, Grok, Luna, and Spark"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"

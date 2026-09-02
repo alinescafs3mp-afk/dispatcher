@@ -452,6 +452,10 @@ class StateDB:
             ),
         )
 
+    def latest_event_seq(self) -> int:
+        rows = self.query("SELECT COALESCE(MAX(seq), 0) AS seq FROM events")
+        return int(rows[0]["seq"]) if rows else 0
+
     def snapshot(self, log_tail: int = 500) -> dict[str, Any]:
         missions = self.query("SELECT * FROM missions ORDER BY created_at DESC LIMIT 20")
         tasks = self.query("SELECT * FROM tasks ORDER BY created_at DESC LIMIT 500")
@@ -498,4 +502,5 @@ class StateDB:
             "chat": chat,
             "usage": usage,
             "logs": logs,
+            "event_seq": self.latest_event_seq(),
         }

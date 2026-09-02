@@ -9,6 +9,11 @@ let refreshPending = false;
 let stateClock = 0;
 let appliedClock = 0;
 let reconnectDelay = 1000;
+let socket = null;
+let reconnectTimer = null;
+let lastSocketActivity = 0;
+let lastAppliedEventSeq = 0;
+let highestObservedEventSeq = 0;
 let profileRequestActive = false;
 const logFloors = {};
 
@@ -69,8 +74,11 @@ function missionTasks() {
 function applyState(next, clock) {
   if (clock < appliedClock) return;
   appliedClock = clock;
+  lastAppliedEventSeq = Number(next?.event_seq || 0);
+  highestObservedEventSeq = Math.max(highestObservedEventSeq, lastAppliedEventSeq);
   state = next;
   render();
+  if (highestObservedEventSeq > lastAppliedEventSeq) scheduleRefresh(0);
 }
 
 function renderProfile() {
@@ -79,7 +87,7 @@ function renderProfile() {
   $('#profileEyebrow').textContent = `SOL LINK / ${current.eyebrow || 'OPERATIONS'}`;
   $('#profileWord').textContent = current.id === 'combat' ? 'combat' : 'reserve';
   $('#profileDescription').textContent = current.description || '';
-  $('#profileBadge').textContent = current.short_label || current.id || 'profile';
+  $('#profileBadge').textContent = current.id === 'combat' ? 'БОЙ' : 'РЕЗЕРВ';
   $('#profileBadge').className = `badge ${current.id === 'combat' ? 'combat' : 'reserve'}`;
   $('#directiveLink').href = `/api/directive/${encodeURIComponent(current.id || 'reserve')}`;
 
@@ -122,7 +130,7 @@ function renderMission() {
     ].filter(Boolean).join('  |  ');
   }
 
-  $('#startBtn').disabled = running || profileRequestActive;
+  $('#startBtn').disabled = running || profileRequestActive || Boolean(state?.profile_switch_locked);
   $('#goalInput').disabled = running;
   $('#pauseBtn').disabled = !running || mission?.status === 'paused';
   $('#resumeBtn').disabled = !running || mission?.status !== 'paused';
@@ -423,6 +431,10 @@ async function decide(id, approved) {
 
 async function switchProfile(profileId, combatGrokEnabled) {
   if (profileRequestActive || state?.profile_switch_locked) return;
+  const current = profile();
+  const sameHelperSetting = profileId !== 'combat'
+    || Boolean(combatGrokEnabled) === Boolean(current.combat_grok_enabled);
+  if (current.id === profileId && sameHelperSetting) return;
   profileRequestActive = true;
   renderProfile();
   try {
@@ -477,7 +489,7 @@ $('#chatForm').onsubmit = async event => {
   const delivery = $('#chatDelivery').value;
   input.value = '';
   const result = await requestAction('/api/chat', {
-    body: {text, recipient, delivery},
+    body: {text, recipient: `slot:${recipient}`, delivery},
   });
   if (!result) {
     input.value = text;
@@ -532,37 +544,99 @@ $$('[data-role="effort"]').forEach(select => {
   };
 });
 
+function scheduleReconnect() {
+  if (reconnectTimer || !navigator.onLine) return;
+  const jitter = Math.round(reconnectDelay * (0.8 + Math.random() * 0.4));
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, jitter);
+  reconnectDelay = Math.min(15000, Math.round(reconnectDelay * 1.7));
+}
+
 function connect() {
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${protocol}://${location.host}/ws`);
+  socket = ws;
+  lastSocketActivity = Date.now();
   ws.onopen = () => {
+    if (socket !== ws) return;
     reconnectDelay = 1000;
+    lastSocketActivity = Date.now();
     const badge = $('#socketBadge');
     badge.textContent = 'Sol Link live';
     badge.className = 'badge good';
     scheduleRefresh(0);
   };
   ws.onmessage = event => {
+    if (socket !== ws) return;
+    lastSocketActivity = Date.now();
     try {
       const message = JSON.parse(event.data);
-      if (message.type === 'state.snapshot') applyState(message.payload, ++stateClock);
-      else scheduleRefresh();
+      if (message.type === 'state.snapshot') {
+        applyState(message.payload, ++stateClock);
+        return;
+      }
+      if (message.type === 'system.heartbeat') {
+        const serverSeq = Number(message.payload?.event_seq || 0);
+        highestObservedEventSeq = Math.max(highestObservedEventSeq, serverSeq);
+        if (serverSeq > lastAppliedEventSeq) scheduleRefresh(0);
+        return;
+      }
+      const eventSeq = Number(message.seq || 0);
+      if (
+        eventSeq
+        && highestObservedEventSeq
+        && eventSeq > highestObservedEventSeq + 1
+      ) {
+        scheduleRefresh(0);
+      } else if (eventSeq > lastAppliedEventSeq) {
+        scheduleRefresh();
+      }
+      highestObservedEventSeq = Math.max(highestObservedEventSeq, eventSeq);
     } catch (_) {}
   };
   ws.onclose = () => {
+    if (socket !== ws) return;
+    socket = null;
     const badge = $('#socketBadge');
     badge.textContent = 'reconnecting';
     badge.className = 'badge bad';
-    setTimeout(connect, reconnectDelay);
-    reconnectDelay = Math.min(15000, Math.round(reconnectDelay * 1.7));
+    scheduleReconnect();
   };
   ws.onerror = () => ws.close();
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) scheduleRefresh(0);
+  if (!document.hidden) {
+    scheduleRefresh(0);
+    connect();
+  }
 });
-window.addEventListener('online', () => scheduleRefresh(0));
+window.addEventListener('online', () => {
+  scheduleRefresh(0);
+  connect();
+});
+window.addEventListener('offline', () => {
+  const badge = $('#socketBadge');
+  badge.textContent = 'offline';
+  badge.className = 'badge bad';
+});
+setInterval(() => {
+  if (
+    socket?.readyState === WebSocket.OPEN
+    && Date.now() - lastSocketActivity > 45000
+  ) {
+    socket.close(4000, 'stale websocket');
+  }
+}, 15000);
 refresh();
 connect();
 setInterval(() => scheduleRefresh(0), 10000);

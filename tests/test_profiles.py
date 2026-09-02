@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from nightshift.app import create_app
 from nightshift.config import default_settings
 from nightshift.db import StateDB
+from nightshift.git import MissionWorkspace
 from nightshift.models import AgentResult, RiskLevel, TaskPacket
 from nightshift.orchestrator import NightshiftOrchestrator, OrchestratorError
 from nightshift.profiles import resolve_profile_agents
@@ -278,3 +279,211 @@ def test_profile_api_switches_dashboard_contract(git_repo: Path, tmp_path: Path)
         assert client.get("/api/directive").headers["content-disposition"].endswith(
             'filename="COMBAT_OPERATIONS_DIRECTIVE.md"'
         )
+
+@pytest.mark.asyncio
+async def test_orchestrator_does_not_mutate_shared_settings(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(git_repo, tmp_path)
+    original_grok_id = settings.agents["grok"].id
+    original_grok_adapter = settings.agents["grok"].adapter
+    original_spark_binary = list(settings.agents["spark"].binary_candidates)
+
+    orch = NightshiftOrchestrator(settings)
+    try:
+        await orch.set_profile("combat", combat_grok_enabled=True)
+        assert orch.settings.agent("grok").display_name == "Sol"
+        assert settings.agents["grok"].id == original_grok_id
+        assert settings.agents["grok"].adapter == original_grok_adapter
+        assert settings.agents["spark"].binary_candidates == original_spark_binary
+    finally:
+        await orch.close()
+
+    reopened = NightshiftOrchestrator(settings)
+    try:
+        assert reopened.profile_id == "combat"
+        assert reopened.settings.agent("grok").adapter == "codex"
+        assert reopened.settings.agent("spark").adapter == "grok"
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.asyncio
+async def test_reselecting_active_profile_is_a_noop(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    orch = NightshiftOrchestrator(make_settings(git_repo, tmp_path))
+    try:
+        orch._chat_session_ids[("reserve", "grok")] = "keep-session"
+        before_adapters = orch.adapters
+        result = await orch.set_profile(
+            "reserve",
+            combat_grok_enabled=orch.combat_grok_enabled,
+        )
+        assert result["id"] == "reserve"
+        assert orch.adapters is before_adapters
+        assert orch._chat_session_ids[("reserve", "grok")] == "keep-session"
+    finally:
+        await orch.close()
+
+
+@pytest.mark.asyncio
+async def test_invalid_resume_does_not_switch_profile(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    orch = NightshiftOrchestrator(make_settings(git_repo, tmp_path))
+    try:
+        orch.db.create_mission(
+            "combat-missing-worktree",
+            str(git_repo),
+            "resume me",
+            "paused",
+            profile="combat",
+            profile_options={"combat_grok_enabled": True},
+        )
+        with pytest.raises(OrchestratorError, match="integration worktree"):
+            await orch.resume_interrupted("combat-missing-worktree")
+        assert orch.profile_id == "reserve"
+        assert orch.combat_grok_enabled is False
+        assert orch.settings.agent("grok").display_name == "Grok 4.6"
+    finally:
+        await orch.close()
+
+
+@pytest.mark.asyncio
+async def test_valid_resume_restores_mission_profile(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(git_repo, tmp_path)
+    orch = NightshiftOrchestrator(settings)
+    mission_id = "combat-resume"
+    mission_dir = orch.runtime / "missions" / mission_id
+    workspace = MissionWorkspace(orch.settings, mission_id, mission_dir)
+    prepared = workspace.prepare()
+    orch.db.create_mission(
+        mission_id,
+        str(git_repo),
+        "resume combat development",
+        "paused",
+        profile="combat",
+        profile_options={"combat_grok_enabled": True},
+    )
+    orch.db.update_mission(
+        mission_id,
+        base_sha=prepared["base_sha"],
+        integration_branch=prepared["integration_branch"],
+        integration_path=prepared["integration_path"],
+    )
+    release = asyncio.Event()
+
+    async def held_resume(_row) -> None:
+        await release.wait()
+
+    orch._run_resumed_mission = held_resume  # type: ignore[method-assign]
+    try:
+        await orch.resume_interrupted(mission_id)
+        assert orch.profile_id == "combat"
+        assert orch.combat_grok_enabled is True
+        assert orch.settings.agent("grok").display_name == "Sol"
+        assert orch.settings.agent("spark").display_name == "Grok 4.6"
+        assert orch.workspace is not None
+        assert orch.workspace.integration_path == workspace.integration_path
+    finally:
+        release.set()
+        await orch.close()
+        workspace.cleanup(keep_integration=False)
+
+
+class BlockingChatAdapter(ChatAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run(
+        self,
+        prompt: str,
+        cwd: Path,
+        task_id: str,
+        session_id: str | None,
+        event,
+        read_only: bool = False,
+    ) -> AgentResult:
+        self.started.set()
+        await self.release.wait()
+        return await super().run(
+            prompt,
+            cwd,
+            task_id,
+            session_id,
+            event,
+            read_only,
+        )
+
+
+@pytest.mark.asyncio
+async def test_active_direct_chat_blocks_profile_switch(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    orch = NightshiftOrchestrator(make_settings(git_repo, tmp_path))
+    fake = BlockingChatAdapter()
+    orch.adapters["luna"] = fake  # type: ignore[assignment]
+    chat_task = asyncio.create_task(
+        orch.chat("Explain the current implementation.", recipient="luna", delivery="chat")
+    )
+    try:
+        await asyncio.wait_for(fake.started.wait(), timeout=1)
+        with pytest.raises(OrchestratorError, match="agent turn is active"):
+            await orch.set_profile("combat")
+        assert orch.profile_id == "reserve"
+    finally:
+        fake.release.set()
+        await chat_task
+        await orch.close()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_carries_latest_event_sequence(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    orch = NightshiftOrchestrator(make_settings(git_repo, tmp_path))
+    try:
+        before = orch.snapshot()["event_seq"]
+        await orch._emit("test.profile_event", {"ok": True})
+        after = orch.snapshot()["event_seq"]
+        assert after == before + 1
+    finally:
+        await orch.close()
+
+
+def test_websocket_snapshot_exposes_event_sequence(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(git_repo, tmp_path)
+    with TestClient(create_app(settings)) as client:
+        with client.websocket_connect("/ws") as websocket:
+            message = websocket.receive_json()
+        assert message["type"] == "state.snapshot"
+        assert isinstance(message["payload"]["event_seq"], int)
+
+@pytest.mark.asyncio
+async def test_human_names_do_not_collide_with_internal_lane_keys(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    orch = NightshiftOrchestrator(make_settings(git_repo, tmp_path))
+    try:
+        await orch.set_profile("combat", combat_grok_enabled=True)
+        assert orch._resolve_chat_recipient("Sol") == "grok"
+        assert orch._resolve_chat_recipient("Grok") == "spark"
+        assert orch._resolve_chat_recipient("slot:grok") == "grok"
+        assert orch._resolve_chat_recipient("slot:spark") == "spark"
+    finally:
+        await orch.close()

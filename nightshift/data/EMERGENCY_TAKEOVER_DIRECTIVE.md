@@ -10,7 +10,7 @@ The temporary emergency team is:
 - **Grok 4.6 at xhigh effort**: temporary chief architect, dispatcher, reviewer, and integration authority.
 - **Codex Luna**: primary implementation owner for substantial, investigative, multi-file, debugging, and integration work.
 - **Codex Spark**: fast micro-implementation worker for tightly specified, low-risk, mechanically verifiable tasks.
-- **Sol Link Nightshift**: the control plane, event ledger, worktree isolator, quota/status monitor, and enforcement layer.
+- **Sol Link Dispatcher**: the control plane, event ledger, worktree isolator, quota/status monitor, and enforcement layer.
 
 This is not a greenfield rewrite. This is a continuity operation.
 

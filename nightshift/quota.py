@@ -123,8 +123,8 @@ async def _read_codex_account_once(command: list[str], cwd: Path, timeout: int,
             "params": {
                 "clientInfo": {
                     "name": "sol_link_nightshift",
-                    "title": "Sol Link Nightshift",
-                    "version": "0.2.0",
+                    "title": "Sol Link Dispatcher",
+                    "version": "0.3.0",
                 },
                 "capabilities": {"experimentalApi": True},
             },
@@ -402,8 +402,8 @@ async def _read_grok_billing_once(command: list[str], cwd: Path, timeout: int,
             },
             "clientInfo": {
                 "name": "sol_link_nightshift",
-                "title": "Sol Link Nightshift",
-                "version": "0.2.0",
+                "title": "Sol Link Dispatcher",
+                "version": "0.3.0",
             },
         })
         initialized = await receive(1)
