@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - '.dispatcher-audit/payload.gz'
+      - '.dispatcher-audit/**'
       - '.github/workflows/apply-dispatcher-audit.yml'
 
 permissions:
@@ -33,17 +33,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! -f .dispatcher-audit/payload.gz ]]; then
+          shopt -s nullglob
+          payload_parts=(.dispatcher-audit/part-*)
+          if (( ${#payload_parts[@]} == 0 )); then
             echo 'active=false' >> "$GITHUB_OUTPUT"
             echo 'Audit payload already consumed.'
             exit 0
           fi
           echo 'active=true' >> "$GITHUB_OUTPUT"
-          test "$(git rev-parse HEAD^)" = '9b1983ac70edf23acf036cfd283d5078636d2fbf'
-          echo 'd13c254b191ec92e3024815c7e68873bd4f24679b1a03eff875755d88a6ece6f  .dispatcher-audit/payload.gz' | sha256sum --check --strict
-          gzip -t .dispatcher-audit/payload.gz
+          test "$(git rev-parse HEAD^)" = '11ef40e0c3185209dac2f1e7b9ef179234110498'
+          cat "${payload_parts[@]}" > /tmp/dispatcher-audit.b64
+          echo '8d8e2bb91020f4d39df90a731ab822671fe6d6679a98aed2f5d6c134d559e943  /tmp/dispatcher-audit.b64' | sha256sum --check --strict
+          base64 --decode /tmp/dispatcher-audit.b64 > /tmp/dispatcher-audit.gz
+          echo 'e7fb88f018aa5327681b6b22431fc752f86b390a90095f3f4800046368311485  /tmp/dispatcher-audit.gz' | sha256sum --check --strict
+          gzip -t /tmp/dispatcher-audit.gz
           mkdir -p scripts
-          gzip -dc .dispatcher-audit/payload.gz > scripts/.apply_dispatcher_audit.py
+          gzip -dc /tmp/dispatcher-audit.gz > scripts/.apply_dispatcher_audit.py
           echo '4bf3a87b95ffcace9fe21519e3314e71f9c4dbcd498a3b3c72cc71ff6037df01  scripts/.apply_dispatcher_audit.py' | sha256sum --check --strict
           python scripts/.apply_dispatcher_audit.py
           rm -rf .dispatcher-audit scripts/.apply_dispatcher_audit.py
