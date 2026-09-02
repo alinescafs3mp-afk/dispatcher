@@ -36,7 +36,7 @@ jobs:
               .catchup-final/payload-02.b64 \
               .catchup-final/payload-03.b64 \
             | tr -d '\n' > /tmp/profile-catchup.patch.b64
-          test "$(wc -c < /tmp/profile-catchup.patch.b64)" = '65680'
+          test "$(wc -c < /tmp/profile-catchup.patch.b64)" = '77108'
           base64 --decode /tmp/profile-catchup.patch.b64 > /tmp/profile-catchup.patch.gz
           echo '89cbfab6485093de5ffcff43d18677dc50306bb28c71eb9bcd0b05a8b9411c56  /tmp/profile-catchup.patch.gz' | sha256sum --check --strict
           gzip -t /tmp/profile-catchup.patch.gz
