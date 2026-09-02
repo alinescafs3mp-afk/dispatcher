@@ -16,6 +16,15 @@ source = source.replace(
     1,
 )
 source = source.replace(problem, "", 1)
+
+# These templates contain Python string literals for the generated file. Raw
+# outer strings preserve their backslash escapes instead of materialising
+# accidental physical newlines inside quoted strings.
+for marker in ("methods = '''", "chat_method = '''"):
+    if source.count(marker) != 1:
+        raise RuntimeError(f"profile template marker not found exactly once: {marker}")
+    source = source.replace(marker, marker.replace("= '''", "= r'''"), 1)
+
 namespace = {"__file__": str(APPLY), "__name__": "__main__"}
 exec(compile(source, str(APPLY), "exec"), namespace)
 
@@ -69,6 +78,10 @@ new = '''        row = rows[0]
 if orchestrator.count(old) != 1:
     raise RuntimeError("generated resume-profile block was not found")
 orchestrator = orchestrator.replace(old, new, 1)
+
+# Fail here with a compact syntax error rather than letting Ruff report a
+# cascade hundreds of lines downstream.
+compile(orchestrator, str(orchestrator_path), "exec")
 orchestrator_path.write_text(orchestrator, encoding="utf-8", newline="\n")
 
 # Older databases do not have the new chat columns when executescript first
@@ -79,6 +92,7 @@ old_index = 'CREATE INDEX IF NOT EXISTS idx_chat_channel ON chat(profile, agent_
 if db_text.count(old_index) != 1:
     raise RuntimeError("chat index position was not found")
 db_text = db_text.replace(old_index, '"""', 1)
+compile(db_text, str(db_path), "exec")
 db_path.write_text(db_text, encoding="utf-8", newline="\n")
 
-print("profile refactor and compatibility fixes applied")
+print("profile refactor, compatibility fixes, and syntax preflight applied")
