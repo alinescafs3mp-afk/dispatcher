@@ -42,7 +42,7 @@ _PROFILES: dict[str, ProfileSpec] = {
     "reserve": ProfileSpec(
         id="reserve",
         label="Reserve / emergency takeover",
-        short_label="РЕЗЕРВ",
+        short_label="RESERVE",
         eyebrow="EMERGENCY CONTINUITY",
         description=(
             "Grok temporarily leads the operation; Luna owns substantial implementation "
@@ -85,7 +85,7 @@ _PROFILES: dict[str, ProfileSpec] = {
     "combat": ProfileSpec(
         id="combat",
         label="Combat / normal development",
-        short_label="БОЙ",
+        short_label="COMBAT",
         eyebrow="STABLE DEVELOPMENT",
         description=(
             "Sol owns architecture and the evolving backlog, SolGoodman implements and debugs, "
