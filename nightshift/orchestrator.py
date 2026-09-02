@@ -17,7 +17,7 @@ from .db import StateDB
 from .events import EventHub
 from .forensics import ForensicsScanner
 from .git import (GitError, MissionWorkspace, WorkerTree, assess_risk,
-                  git, path_violations)
+                  git, is_git_repo, path_violations)
 from .models import (
     AgentResult,
     AgentState,
@@ -43,7 +43,7 @@ from .prompts import (
     worker_prompt,
 )
 from .protocol import compact_text, extract_json_dict
-from .redaction import redact
+from .redaction import redact, redact_value
 from .quota import (
     codex_effort_options,
     normalize_codex_quota,
@@ -54,11 +54,36 @@ from .quota import (
 )
 from .validation import run_validation
 
-_TERMINAL_MISSIONS = {
-    MissionState.COMPLETED.value,
-    MissionState.FAILED.value,
-    MissionState.STOPPED.value,
+_BUSY_AGENT_STATES = {
+    AgentState.RECOVERING.value,
+    AgentState.PLANNING.value,
+    AgentState.WORKING.value,
+    AgentState.REVIEWING.value,
+    AgentState.WAITING.value,
 }
+_INTERRUPTED_MISSION_STATES = {
+    MissionState.CREATED.value,
+    MissionState.RECOVERING.value,
+    MissionState.RUNNING.value,
+    MissionState.PAUSED.value,
+    MissionState.AWAITING_HUMAN.value,
+}
+_OPEN_TASK_STATES = {
+    TaskState.PLANNED.value,
+    TaskState.READY.value,
+    TaskState.IMPLEMENTING.value,
+    TaskState.VALIDATING.value,
+    TaskState.REVIEWING.value,
+    TaskState.REVISION.value,
+    TaskState.AWAITING_HUMAN.value,
+}
+_RESUMABLE_MISSIONS = {
+    MissionState.PAUSED.value,
+    MissionState.BLOCKED.value,
+    MissionState.FAILED.value,
+}
+_UNBOUNDED_SCOPE_PATTERNS = {"*", "**", "**/*", ".", "./"}
+
 
 
 class OrchestratorError(RuntimeError):
@@ -80,6 +105,8 @@ class NightshiftOrchestrator:
             "luna": CodexAdapter(settings.agent("luna"), self.runner),
         }
         self.agent_locks = {key: asyncio.Lock() for key in self.adapters}
+        self._doctor_lock = asyncio.Lock()
+        self._quota_lock = asyncio.Lock()
         self.quota_cache: dict[str, dict[str, Any]] = {}
         self.codex_homes: dict[str, str] = {}
         self.workspace: MissionWorkspace | None = None
@@ -115,13 +142,51 @@ class NightshiftOrchestrator:
             )
 
     def _mark_interrupted_missions_paused(self) -> None:
+        placeholders = ",".join("?" for _ in _INTERRUPTED_MISSION_STATES)
         rows = self.db.query(
-            "SELECT id,status FROM missions WHERE status NOT IN (?,?,?)",
-            tuple(_TERMINAL_MISSIONS),
+            f"SELECT id,status FROM missions WHERE status IN ({placeholders})",
+            tuple(_INTERRUPTED_MISSION_STATES),
         )
         for row in rows:
-            self.db.update_mission(row["id"], status=MissionState.PAUSED.value,
-                                   summary="Nightshift process restarted; mission state preserved")
+            self._block_open_tasks(
+                row["id"],
+                "Nightshift process restarted before this task reached a terminal state",
+            )
+            self.db.update_mission(
+                row["id"],
+                status=MissionState.PAUSED.value,
+                summary="Nightshift process restarted; mission state preserved",
+            )
+
+    def _mission_task_running(self) -> bool:
+        return bool(self._mission_task and not self._mission_task.done())
+
+    def _mission_row(self, mission_id: str | None = None) -> dict[str, Any] | None:
+        selected = mission_id if mission_id is not None else self.mission_id
+        if not selected:
+            return None
+        rows = self.db.query("SELECT * FROM missions WHERE id=?", (selected,))
+        return rows[0] if rows else None
+
+    def _require_running_mission(self, action: str) -> dict[str, Any]:
+        row = self._mission_row()
+        if row is None or not self._mission_task_running():
+            raise OrchestratorError(f"No running mission to {action}")
+        return row
+
+    def _block_open_tasks(self, mission_id: str, reason: str) -> None:
+        placeholders = ",".join("?" for _ in _OPEN_TASK_STATES)
+        rows = self.db.query(
+            f"SELECT id,result_json FROM tasks WHERE mission_id=? AND status IN ({placeholders})",
+            (mission_id, *tuple(_OPEN_TASK_STATES)),
+        )
+        for row in rows:
+            try:
+                result = json.loads(row.get("result_json") or "{}")
+            except json.JSONDecodeError:
+                result = {}
+            result["interruption"] = reason
+            self.db.update_task(row["id"], status=TaskState.BLOCKED.value, result_json=result)
 
     async def close(self) -> None:
         self._stop_requested.set()
@@ -140,10 +205,15 @@ class NightshiftOrchestrator:
                     sender: str = "nightshift", recipient: str = "ui",
                     task_id: str = "", mission_id: str | None = None) -> None:
         mission = self.mission_id if mission_id is None else mission_id
-        seq = self.db.add_event(sender, recipient, event_type, payload,
-                                mission_id=mission, task_id=task_id)
+        safe_payload = redact_value(payload)
+        if not isinstance(safe_payload, dict):
+            safe_payload = {"value": safe_payload}
+        seq = self.db.add_event(
+            sender, recipient, event_type, safe_payload,
+            mission_id=mission, task_id=task_id,
+        )
         await self.hub.publish({
-            "seq": seq, "type": event_type, "payload": payload,
+            "seq": seq, "type": event_type, "payload": safe_payload,
             "sender": sender, "recipient": recipient,
             "task_id": task_id, "mission_id": mission,
             "created_at": utc_now(),
@@ -193,100 +263,164 @@ class NightshiftOrchestrator:
 
     async def doctor(self) -> dict[str, Any]:
         repo = self.settings.project.repo_path
-        results: dict[str, Any] = {}
-        for key, adapter in self.adapters.items():
-            config = self.settings.agent(key)
-            if not config.enabled:
-                results[key] = {"enabled": False, "ready": False}
-                continue
-            probe = await adapter.probe(repo if repo.exists() else Path.cwd())
-            results[key] = probe
-            state = AgentState.IDLE if probe.get("ready") else AgentState.OFFLINE
-            self.db.upsert_agent(
-                config.id, config.role, state.value,
-                model=config.model, binary=probe.get("binary", adapter.binary),
-                last_error=probe.get("error", ""),
-                metadata={"key": key, "effort": config.effort, "probe": probe},
-            )
-            await self._emit("agent.probe", {"key": key, **probe}, sender=config.id)
-        return results
+        cwd = repo if repo.exists() else Path.cwd()
+        async with self._doctor_lock:
+            results: dict[str, Any] = {}
+            for key, adapter in self.adapters.items():
+                config = self.settings.agent(key)
+                if not config.enabled:
+                    probe: dict[str, Any] = {
+                        "enabled": False,
+                        "installed": bool(config.resolve_binary()),
+                        "ready": False,
+                        "error": "agent disabled by configuration",
+                    }
+                else:
+                    try:
+                        async with self.agent_locks[key]:
+                            probe = await adapter.probe(cwd)
+                    except Exception as exc:
+                        probe = {
+                            "enabled": True,
+                            "installed": bool(config.resolve_binary()),
+                            "ready": False,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                safe_probe = redact_value(probe)
+                assert isinstance(safe_probe, dict)
+                results[key] = safe_probe
+                existing_rows = self.db.query("SELECT * FROM agents WHERE id=?", (config.id,))
+                existing = existing_rows[0] if existing_rows else {}
+                preserve_busy = (
+                    existing.get("state") in _BUSY_AGENT_STATES
+                    and bool(existing.get("current_task"))
+                )
+                state = (
+                    str(existing.get("state"))
+                    if preserve_busy
+                    else (AgentState.IDLE.value if safe_probe.get("ready") else AgentState.OFFLINE.value)
+                )
+                current_task = str(existing.get("current_task") or "") if preserve_busy else ""
+                last_error = str(existing.get("last_error") or "") if preserve_busy else str(
+                    safe_probe.get("error") or ""
+                )
+                self.db.upsert_agent(
+                    config.id, config.role, state,
+                    model=config.model,
+                    binary=str(safe_probe.get("binary") or adapter.binary or ""),
+                    current_task=current_task,
+                    last_error=last_error,
+                    metadata={"key": key, "effort": config.effort, "probe": safe_probe},
+                )
+                await self._emit("agent.probe", {"key": key, **safe_probe}, sender=config.id)
+            return results
 
     async def refresh_quotas(self) -> dict[str, Any]:
         repo = self.settings.project.repo_path
         cwd = repo if repo.exists() else Path.cwd()
-        snapshots: dict[str, Any] = {}
-        for key in ("spark", "luna"):
-            config = self.settings.agent(key)
-            binary = config.resolve_binary()
-            try:
-                payload = await read_codex_account(
-                    binary, cwd, env=config.subprocess_env()
+        async with self._quota_lock:
+            snapshots: dict[str, Any] = {}
+            for key in ("spark", "luna"):
+                config = self.settings.agent(key)
+                if not config.enabled:
+                    data: dict[str, Any] = {
+                        "agent_id": config.id,
+                        "available": False,
+                        "windows": [],
+                        "message": "Agent disabled by configuration",
+                        "fetched_at": utc_now(),
+                    }
+                else:
+                    try:
+                        async with self.agent_locks[key]:
+                            payload = await read_codex_account(
+                                config.resolve_binary(), cwd, env=config.subprocess_env()
+                            )
+                        snapshot = normalize_codex_quota(config.id, payload)
+                        home = str(payload.get("codex_home") or "")
+                        if home:
+                            self.codex_homes[key] = home
+                        options, matched_model = codex_effort_options(
+                            payload, config.model, prefer_luna=(key == "luna")
+                        )
+                        if options:
+                            if config.effort and config.effort not in options:
+                                options.append(config.effort)
+                            config.effort_options = options
+                        self.db.update_agent(
+                            config.id,
+                            model=config.model or matched_model,
+                            metadata_json={
+                                "key": key,
+                                "effort": config.effort,
+                                "effort_options": config.effort_options,
+                                "resolved_model": matched_model,
+                                "quota_source": "codex app-server",
+                            },
+                        )
+                        data = snapshot.model_dump()
+                    except Exception as exc:
+                        data = {
+                            "agent_id": config.id,
+                            "available": False,
+                            "windows": [],
+                            "message": f"{type(exc).__name__}: {exc}",
+                            "fetched_at": utc_now(),
+                        }
+                safe_data = redact_value(data)
+                assert isinstance(safe_data, dict)
+                snapshots[key] = safe_data
+                self.quota_cache[key] = safe_data
+                await self._emit(
+                    "agent.quota", {"key": key, "snapshot": safe_data}, sender=config.id
                 )
-                snapshot = normalize_codex_quota(config.id, payload)
-                home = str(payload.get("codex_home") or "")
-                if home:
-                    self.codex_homes[key] = home
-                options, matched_model = codex_effort_options(
-                    payload, config.model, prefer_luna=(key == "luna")
-                )
-                if options:
-                    if config.effort and config.effort not in options:
-                        options.append(config.effort)
-                    config.effort_options = options
-                self.db.update_agent(
-                    config.id,
-                    model=config.model or matched_model,
-                    metadata_json={
-                        "key": key,
-                        "effort": config.effort,
-                        "effort_options": config.effort_options,
-                        "resolved_model": matched_model,
-                        "quota_source": "codex app-server",
-                    },
-                )
-            except Exception as exc:
-                snapshot = {
-                    "agent_id": config.id,
+
+            grok_config = self.settings.agent("grok")
+            if not grok_config.enabled:
+                grok_data: dict[str, Any] = {
+                    "agent_id": grok_config.id,
                     "available": False,
                     "windows": [],
-                    "message": str(exc),
+                    "message": "Agent disabled by configuration",
                     "fetched_at": utc_now(),
                 }
-            data = snapshot.model_dump() if hasattr(snapshot, "model_dump") else snapshot
-            snapshots[key] = data
-            self.quota_cache[key] = data
-            await self._emit("agent.quota", {"key": key, "snapshot": data}, sender=config.id)
-
-        grok_config = self.settings.agent("grok")
-        try:
-            payload = await read_grok_billing(
-                grok_config.resolve_binary(), cwd, env=grok_config.subprocess_env()
+            else:
+                try:
+                    async with self.agent_locks["grok"]:
+                        payload = await read_grok_billing(
+                            grok_config.resolve_binary(), cwd,
+                            env=grok_config.subprocess_env(),
+                        )
+                    grok_snapshot = normalize_grok_quota(grok_config.id, payload)
+                except Exception as acp_exc:
+                    async with self.agent_locks["grok"]:
+                        grok_snapshot = await read_configured_quota(
+                            grok_config, self.runner, cwd
+                        )
+                    if not grok_snapshot.available:
+                        grok_snapshot.message = (
+                            f"Grok ACP billing unavailable: {acp_exc}. "
+                            + grok_snapshot.message
+                        )
+                grok_data = grok_snapshot.model_dump()
+            safe_grok_data = redact_value(grok_data)
+            assert isinstance(safe_grok_data, dict)
+            snapshots["grok"] = safe_grok_data
+            self.quota_cache["grok"] = safe_grok_data
+            self.db.update_agent(
+                grok_config.id,
+                metadata_json={
+                    "key": "grok",
+                    "effort": grok_config.effort,
+                    "effort_options": grok_config.effort_options,
+                    "quota_source": safe_grok_data.get("raw", {}).get("source", "fallback"),
+                },
             )
-            grok_snapshot = normalize_grok_quota(grok_config.id, payload)
-        except Exception as acp_exc:
-            grok_snapshot = await read_configured_quota(grok_config, self.runner, cwd)
-            if not grok_snapshot.available:
-                grok_snapshot.message = (
-                    f"Grok ACP billing unavailable: {acp_exc}. "
-                    + grok_snapshot.message
-                )
-        grok_data = grok_snapshot.model_dump()
-        snapshots["grok"] = grok_data
-        self.quota_cache["grok"] = grok_data
-        self.db.update_agent(
-            grok_config.id,
-            metadata_json={
-                "key": "grok",
-                "effort": grok_config.effort,
-                "effort_options": grok_config.effort_options,
-                "quota_source": grok_data.get("raw", {}).get("source", "fallback"),
-            },
-        )
-        await self._emit(
-            "agent.quota", {"key": "grok", "snapshot": grok_data},
-            sender=grok_config.id,
-        )
-        return snapshots
+            await self._emit(
+                "agent.quota", {"key": "grok", "snapshot": safe_grok_data},
+                sender=grok_config.id,
+            )
+            return snapshots
 
     async def set_reasoning(self, key: str, effort: str) -> dict[str, Any]:
         if key not in self.settings.agents:
@@ -325,19 +459,25 @@ class NightshiftOrchestrator:
         data["quotas"] = self.quota_cache
         data["config"] = self.settings.public_dict()
         data["active_mission_id"] = self.mission_id
-        data["mission_running"] = bool(self._mission_task and not self._mission_task.done())
+        data["mission_running"] = self._mission_task_running()
         return data
 
     async def start_mission(self, goal: str) -> str:
-        if self._mission_task and not self._mission_task.done():
+        if self._mission_task_running():
             raise OrchestratorError("A mission is already running")
+        goal = goal.strip()
+        if len(goal) < 3:
+            raise OrchestratorError("Mission goal is too short")
         repo = self.settings.project.repo_path
         if not repo.exists():
             raise OrchestratorError(f"Repository does not exist: {repo}")
+        if not is_git_repo(repo):
+            raise OrchestratorError(f"Not a Git repository: {repo}")
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         self.mission_id = f"ns-{stamp}-{uuid.uuid4().hex[:6]}"
         self.mission_dir = self.runtime / "missions" / self.mission_id
         self.mission_dir.mkdir(parents=True, exist_ok=False)
+        self.workspace = None
         directive_copy = self.mission_dir / "EMERGENCY_TAKEOVER_DIRECTIVE.md"
         directive_copy.write_text(load_directive(), encoding="utf-8")
         self.db.create_mission(
@@ -346,6 +486,10 @@ class NightshiftOrchestrator:
         )
         self._stop_requested.clear()
         self._pause_gate.set()
+        for future in list(self._approval_futures.values()):
+            if not future.done():
+                future.cancel()
+        self._approval_futures.clear()
         self._grok_session_id = None
         self.db.update_agent(self.settings.agent("grok").id, session_id="")
         self._grok_chat_session_id = None
@@ -356,51 +500,114 @@ class NightshiftOrchestrator:
         return self.mission_id
 
     async def resume_interrupted(self, mission_id: str) -> None:
-        if self._mission_task and not self._mission_task.done():
+        if self._mission_task_running():
             raise OrchestratorError("A mission is already running")
         rows = self.db.query("SELECT * FROM missions WHERE id=?", (mission_id,))
         if not rows:
             raise OrchestratorError("Mission not found")
         row = rows[0]
-        integration_path = Path(row["integration_path"])
-        if not integration_path.exists():
-            raise OrchestratorError("Mission integration worktree no longer exists")
+        if row["status"] not in _RESUMABLE_MISSIONS:
+            raise OrchestratorError(
+                f"Mission in state {row['status']!r} cannot be resumed"
+            )
+        try:
+            stored_repo = Path(row["repo"]).expanduser().resolve()
+        except (OSError, RuntimeError) as exc:
+            raise OrchestratorError(f"Mission repository path is invalid: {exc}") from exc
+        if stored_repo != self.settings.project.repo_path:
+            raise OrchestratorError("Mission belongs to a different configured repository")
+        raw_integration_path = str(row.get("integration_path") or "").strip()
+        if not raw_integration_path:
+            raise OrchestratorError("Mission has no preserved integration worktree")
+        integration_path = Path(raw_integration_path).expanduser().resolve()
+        if not integration_path.is_dir() or not is_git_repo(integration_path):
+            raise OrchestratorError("Mission integration worktree no longer exists or is invalid")
+        expected_branch = str(row.get("integration_branch") or "").strip()
+        actual_branch = git(
+            integration_path, "rev-parse", "--abbrev-ref", "HEAD"
+        ).strip()
+        if expected_branch and actual_branch != expected_branch:
+            raise OrchestratorError(
+                f"Integration worktree is on {actual_branch!r}, expected {expected_branch!r}"
+            )
         self.mission_id = mission_id
         self.mission_dir = self.runtime / "missions" / mission_id
+        if not self.mission_dir.is_dir():
+            raise OrchestratorError("Mission runtime directory no longer exists")
         self.workspace = MissionWorkspace.reopen(
             self.settings, mission_id, self.mission_dir, integration_path,
             row["integration_branch"], row["base_sha"],
         )
         self._stop_requested.clear()
         self._pause_gate.set()
-        agent_rows = self.db.query("SELECT session_id FROM agents WHERE id=?",
-                                   (self.settings.agent("grok").id,))
-        self._grok_session_id = agent_rows[0]["session_id"] if agent_rows and agent_rows[0]["session_id"] else None
+        self._approval_futures.clear()
+        agent_rows = self.db.query(
+            "SELECT session_id FROM agents WHERE id=?",
+            (self.settings.agent("grok").id,),
+        )
+        self._grok_session_id = (
+            agent_rows[0]["session_id"]
+            if agent_rows and agent_rows[0]["session_id"]
+            else None
+        )
+        self._grok_chat_session_id = None
+        self._grok_turns = 0
+        self._decision_counter = int(
+            self.db.query(
+                "SELECT COUNT(*) AS count FROM tasks WHERE mission_id=?", (mission_id,)
+            )[0]["count"]
+        )
         self._mission_task = asyncio.create_task(self._run_resumed_mission(row))
         await self._emit("mission.resumed", {"mission_id": mission_id})
 
     async def pause(self) -> None:
+        row = self._require_running_mission("pause")
+        if row["status"] == MissionState.PAUSED.value:
+            return
         self._pause_gate.clear()
-        if self.mission_id:
-            self.db.update_mission(self.mission_id, status=MissionState.PAUSED.value)
+        self.db.update_mission(self.mission_id, status=MissionState.PAUSED.value)
         await self._emit("mission.paused", {"mission_id": self.mission_id})
 
     async def resume(self) -> None:
+        row = self._require_running_mission("resume")
+        if row["status"] != MissionState.PAUSED.value:
+            raise OrchestratorError("Mission is not paused")
         self._pause_gate.set()
-        if self.mission_id:
-            self.db.update_mission(self.mission_id, status=MissionState.RUNNING.value)
-        await self._emit("mission.running", {"mission_id": self.mission_id})
+        if self._approval_futures:
+            state = MissionState.AWAITING_HUMAN.value
+            event_type = "mission.awaiting_human"
+        else:
+            state = MissionState.RUNNING.value
+            event_type = "mission.running"
+        self.db.update_mission(self.mission_id, status=state)
+        await self._emit(event_type, {"mission_id": self.mission_id})
 
     async def stop(self) -> None:
+        self._require_running_mission("stop")
         self._stop_requested.set()
         self._pause_gate.set()
+        for future in list(self._approval_futures.values()):
+            if not future.done():
+                future.cancel()
+        self._approval_futures.clear()
+        task = self._mission_task
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        self._mission_task = None
         await self.runner.stop_all()
-        if self._mission_task and not self._mission_task.done():
-            self._mission_task.cancel()
-            await asyncio.gather(self._mission_task, return_exceptions=True)
-        if self.mission_id:
-            self.db.update_mission(self.mission_id, status=MissionState.STOPPED.value,
-                                   summary="Stopped by human operator")
+        self._block_open_tasks(self.mission_id, "Stopped by human operator")
+        for key, config in self.settings.agents.items():
+            rows = self.db.query("SELECT state,current_task FROM agents WHERE id=?", (config.id,))
+            if rows and rows[0]["state"] in _BUSY_AGENT_STATES:
+                await self._set_agent(
+                    key, AgentState.STOPPED, error="Stopped by human operator"
+                )
+        self.db.update_mission(
+            self.mission_id,
+            status=MissionState.STOPPED.value,
+            summary="Stopped by human operator",
+        )
         await self._emit("mission.stopped", {"mission_id": self.mission_id})
 
     async def approve_task(self, task_id: str, approved: bool, note: str = "") -> None:
@@ -418,30 +625,55 @@ class NightshiftOrchestrator:
             raise OrchestratorError("Message is empty")
         self.db.add_chat("user", text)
         await self._emit("chat.message", {"role": "user", "text": text}, sender="human")
-        cwd = self.settings.project.repo_path
-        if self.workspace:
-            cwd = await asyncio.to_thread(self.workspace.sync_architect_worktree)
         digest = self._mission_digest() if self.mission_id else "No active Nightshift mission."
-        prompt = chat_prompt(text) + "\n\nCurrent compact mission ledger:\n" + compact_text(digest, 9000)
-        await self._set_agent("grok", AgentState.PLANNING, current_task="operator-chat")
-        async with self.agent_locks["grok"]:
-            result = await self.adapters["grok"].run(
-                prompt, cwd, "chat", self._grok_chat_session_id,
-                self._callback("grok", "chat"), read_only=True,
-            )
-        self._grok_chat_session_id = result.session_id or self._grok_chat_session_id
-        self._record_usage("grok", "chat", result)
-        await self._set_agent(
-            "grok",
-            AgentState.IDLE if result.ok else (AgentState.LIMITED if result.limit_detected else AgentState.ERROR),
-            error=result.error,
+        prompt = chat_prompt(text) + "
+
+Current compact mission ledger:
+" + compact_text(
+            digest, 9000
         )
-        if self.workspace:
-            await asyncio.to_thread(self.workspace.sync_architect_worktree)
-        answer = result.final_text or result.error or "Grok returned no text."
+        async with self.agent_locks["grok"]:
+            cwd = self.settings.project.repo_path
+            if self.workspace:
+                cwd = await asyncio.to_thread(self.workspace.sync_architect_worktree)
+            await self._set_agent("grok", AgentState.PLANNING, current_task="operator-chat")
+            try:
+                result = await self.adapters["grok"].run(
+                    prompt, cwd, "chat", self._grok_chat_session_id,
+                    self._callback("grok", "chat"), read_only=True,
+                )
+            except asyncio.CancelledError:
+                await self._set_agent("grok", AgentState.STOPPED, error="Operator chat cancelled")
+                raise
+            except Exception as exc:
+                result = AgentResult(
+                    ok=False, returncode=1,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            self._grok_chat_session_id = result.session_id or self._grok_chat_session_id
+            self._record_usage("grok", "chat", result)
+            if self.workspace:
+                try:
+                    await asyncio.to_thread(self.workspace.sync_architect_worktree)
+                except Exception as exc:
+                    result = result.model_copy(update={
+                        "ok": False,
+                        "error": (result.error + f"
+Architect worktree reset failed: {exc}").strip(),
+                    })
+            await self._set_agent(
+                "grok",
+                AgentState.IDLE if result.ok else (
+                    AgentState.LIMITED if result.limit_detected else AgentState.ERROR
+                ),
+                error=result.error,
+            )
+        answer = redact(result.final_text or result.error or "Grok returned no text.")
         self.db.add_chat("assistant", answer)
-        await self._emit("chat.message", {"role": "assistant", "text": answer},
-                         sender=self.settings.agent("grok").id)
+        await self._emit(
+            "chat.message", {"role": "assistant", "text": answer},
+            sender=self.settings.agent("grok").id,
+        )
         return answer
 
     async def _run_new_mission(self, mission_id: str, goal: str) -> None:
@@ -472,7 +704,7 @@ class NightshiftOrchestrator:
             self.db.update_mission(mission_id, status=MissionState.RUNNING.value)
             await self._emit("mission.running", {"mission_id": mission_id})
             assert self.workspace is not None
-            architect_cwd = await asyncio.to_thread(self.workspace.sync_architect_worktree)
+            architect_cwd = self.workspace.architect_path
             prompt = architect_bootstrap_prompt(
                 load_directive(), Path(dossier["markdown_path"]), architect_cwd,
                 goal, predecessor_handoffs,
@@ -501,7 +733,7 @@ class NightshiftOrchestrator:
                 forensics_path=dossier["markdown_path"],
             )
             digest = self._mission_digest()
-            cwd = await asyncio.to_thread(self.workspace.sync_architect_worktree)
+            cwd = self.workspace.architect_path
             try:
                 dossier_excerpt = compact_text(
                     Path(dossier["markdown_path"]).read_text(
@@ -531,7 +763,12 @@ Select exactly one safe continuation task, or declare completion only after the 
             await self._fail_mission(exc)
 
     async def _decision_loop(self, decision: Any) -> None:
-        completed_count = 0
+        completed_count = int(
+            self.db.query(
+                "SELECT COUNT(*) AS count FROM tasks WHERE mission_id=?",
+                (self.mission_id,),
+            )[0]["count"]
+        )
         final_audit_attempted = False
         while not self._stop_requested.is_set():
             await self._pause_gate.wait()
@@ -543,7 +780,7 @@ Select exactly one safe continuation task, or declare completion only after the 
                 completed_count += 1
                 digest = self._mission_digest()
                 assert self.workspace is not None
-                cwd = await asyncio.to_thread(self.workspace.sync_architect_worktree)
+                cwd = self.workspace.architect_path
                 decision = await self._ask_architect_decision(
                     architect_next_prompt(digest, cwd), phase="next",
                 )
@@ -559,7 +796,7 @@ Select exactly one safe continuation task, or declare completion only after the 
                 final_audit_attempted = True
                 digest = self._mission_digest()
                 assert self.workspace is not None
-                cwd = await asyncio.to_thread(self.workspace.sync_architect_worktree)
+                cwd = self.workspace.architect_path
                 decision = await self._ask_architect_decision(
                     final_audit_prompt(digest, cwd), phase="final-audit",
                 )
@@ -612,9 +849,14 @@ Select exactly one safe continuation task, or declare completion only after the 
                     "key": key, "session_id": session_id, "error": result.error,
                     "limit_detected": result.limit_detected,
                 })
-            await self._set_agent(key, AgentState.IDLE,
-                                  session_id=result.session_id or session_id,
-                                  error=result.error)
+            await self._set_agent(
+                key,
+                AgentState.IDLE if result.ok else (
+                    AgentState.LIMITED if result.limit_detected else AgentState.ERROR
+                ),
+                session_id=result.session_id or session_id,
+                error=result.error,
+            )
         return handoffs
 
     @staticmethod
@@ -628,36 +870,60 @@ Select exactly one safe continuation task, or declare completion only after the 
 
     async def _run_grok(self, prompt: str, cwd: Path, phase: str,
                         read_only: bool = True) -> AgentResult:
-        if self._grok_turns >= self.settings.orchestrator.architect_session_max_turns:
-            self._grok_session_id = None
-            self._grok_turns = 0
-            prompt = (
-                "This is a rotated architect session. Reconstruct continuity from the repository, "
-                "Nightshift ledger, and the prompt below. The emergency directive remains binding.\n\n" + prompt
-            )
-            await self._emit("architect.session_rotated", {"phase": phase})
-        await self._set_agent("grok", AgentState.PLANNING if phase != "review" else AgentState.REVIEWING,
-                              current_task=phase)
         async with self.agent_locks["grok"]:
-            result = await self.adapters["grok"].run(
-                prompt, cwd, phase, self._grok_session_id,
-                self._callback("grok", phase), read_only=read_only,
+            if self._grok_turns >= self.settings.orchestrator.architect_session_max_turns:
+                self._grok_session_id = None
+                self._grok_turns = 0
+                prompt = (
+                    "This is a rotated architect session. Reconstruct continuity from the repository, "
+                    "Nightshift ledger, and the prompt below. The emergency directive remains binding.
+
+"
+                    + prompt
+                )
+                await self._emit("architect.session_rotated", {"phase": phase})
+            if self.workspace:
+                cwd = await asyncio.to_thread(self.workspace.sync_architect_worktree)
+            state = AgentState.REVIEWING if phase.startswith("review") else AgentState.PLANNING
+            await self._set_agent("grok", state, current_task=phase)
+            try:
+                result = await self.adapters["grok"].run(
+                    prompt, cwd, phase, self._grok_session_id,
+                    self._callback("grok", phase), read_only=read_only,
+                )
+            except asyncio.CancelledError:
+                await self._set_agent("grok", AgentState.STOPPED, error="Grok turn cancelled")
+                raise
+            except Exception as exc:
+                result = AgentResult(
+                    ok=False, returncode=1,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            self._grok_session_id = result.session_id or self._grok_session_id
+            self._grok_turns += 1
+            self._record_usage("grok", phase, result)
+            if self.workspace:
+                try:
+                    await asyncio.to_thread(self.workspace.sync_architect_worktree)
+                except Exception as exc:
+                    result = result.model_copy(update={
+                        "ok": False,
+                        "error": (result.error + f"
+Architect worktree reset failed: {exc}").strip(),
+                    })
+            await self._set_agent(
+                "grok",
+                AgentState.IDLE if result.ok else (
+                    AgentState.LIMITED if result.limit_detected else AgentState.ERROR
+                ),
+                session_id=self._grok_session_id,
+                error=result.error,
             )
-        self._grok_session_id = result.session_id or self._grok_session_id
-        self._grok_turns += 1
-        self._record_usage("grok", phase, result)
-        await self._set_agent(
-            "grok", AgentState.IDLE if result.ok else (AgentState.LIMITED if result.limit_detected else AgentState.ERROR),
-            session_id=self._grok_session_id, error=result.error,
-        )
-        if self.workspace:
-            # Architect has a disposable detached worktree. Any accidental writes are discarded.
-            await asyncio.to_thread(self.workspace.sync_architect_worktree)
-        return result
+            return result
 
     async def _ask_architect_decision(self, prompt: str, phase: str) -> Any:
         assert self.workspace is not None
-        cwd = await asyncio.to_thread(self.workspace.sync_architect_worktree)
+        cwd = self.workspace.architect_path
         result = await self._run_grok(prompt, cwd, phase, read_only=True)
         if not result.ok:
             if result.limit_detected:
@@ -719,19 +985,32 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                 return
             self.db.update_task(task_id, status=(TaskState.IMPLEMENTING.value if attempt == 1 else TaskState.REVISION.value),
                                 attempt=attempt)
-            await self._set_agent(active_worker, AgentState.WORKING, current_task=task_id)
             prompt = worker_prompt(packet, tree.base_sha, revision_context)
             async with self.agent_locks[active_worker]:
-                result = await self.adapters[active_worker].run(
-                    prompt, tree.path, task_id, None,
-                    self._callback(active_worker, task_id), read_only=False,
+                await self._set_agent(active_worker, AgentState.WORKING, current_task=task_id)
+                try:
+                    result = await self.adapters[active_worker].run(
+                        prompt, tree.path, task_id, None,
+                        self._callback(active_worker, task_id), read_only=False,
+                    )
+                except asyncio.CancelledError:
+                    await self._set_agent(
+                        active_worker, AgentState.STOPPED, error="Worker turn cancelled"
+                    )
+                    raise
+                except Exception as exc:
+                    result = AgentResult(
+                        ok=False, returncode=1,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                self._record_usage(active_worker, task_id, result)
+                await self._set_agent(
+                    active_worker,
+                    AgentState.IDLE if result.ok else (
+                        AgentState.LIMITED if result.limit_detected else AgentState.ERROR
+                    ),
+                    error=result.error,
                 )
-            self._record_usage(active_worker, task_id, result)
-            await self._set_agent(
-                active_worker,
-                AgentState.IDLE if result.ok else (AgentState.LIMITED if result.limit_detected else AgentState.ERROR),
-                error=result.error,
-            )
             safety_violations = await asyncio.to_thread(
                 self.workspace.sanitize_worker_changes, tree
             )
@@ -766,6 +1045,7 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                     }
                     active_worker = fallback
                     packet.worker = fallback
+                    self.db.update_task(task_id, worker=fallback)
                     continue
 
             changed_paths = await asyncio.to_thread(self.workspace.worker_changed_files, tree)
@@ -792,14 +1072,13 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                 violations.append("worker produced no changed files")
 
             self.db.update_task(task_id, status=TaskState.REVIEWING.value)
-            await self._set_agent("grok", AgentState.REVIEWING, current_task=task_id)
             review_prompt = architect_review_prompt(
                 packet, tree.path, tree.base_sha, worker_head, changed_paths,
                 validation, violations, measured_risk.value,
             )
             grok_result = await self._run_grok(
                 review_prompt,
-                await asyncio.to_thread(self.workspace.sync_architect_worktree),
+                self.workspace.architect_path,
                 phase="review", read_only=True,
             )
             if not grok_result.ok:
@@ -809,7 +1088,7 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
             except (ValueError, ValidationError) as exc:
                 repair = await self._run_grok(
                     f"Review JSON failed validation: {exc}. Repeat only one valid marked review object.",
-                    await asyncio.to_thread(self.workspace.sync_architect_worktree),
+                    self.workspace.architect_path,
                     phase="review-repair", read_only=True,
                 )
                 if not repair.ok:
@@ -899,15 +1178,42 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
 
     def _normalize_packet(self, packet: TaskPacket) -> TaskPacket:
         update: dict[str, Any] = {}
-        if packet.worker == "spark":
+        worker = packet.worker
+        risk = packet.risk
+        unbounded_scope = any(
+            path.strip() in _UNBOUNDED_SCOPE_PATTERNS for path in packet.allowed_paths
+        )
+        if unbounded_scope and risk in {RiskLevel.LOW, RiskLevel.MEDIUM}:
+            risk = RiskLevel.HIGH
+            update["risk"] = risk
+        if worker == "spark":
             too_broad = (
-                packet.risk != RiskLevel.LOW
+                risk != RiskLevel.LOW
                 or (packet.max_files is not None and packet.max_files > 3)
                 or len(packet.allowed_paths) > 4
+                or unbounded_scope
             )
             if too_broad:
-                update["worker"] = "luna"
-        if packet.worker == "spark" and packet.max_files is None:
+                if not self.settings.agent("luna").enabled:
+                    raise OrchestratorError(
+                        "Task is too broad for Spark and the Luna lane is disabled"
+                    )
+                worker = "luna"
+                update["worker"] = worker
+        if not self.settings.agent(worker).enabled:
+            can_use_spark = (
+                worker == "luna"
+                and self.settings.agent("spark").enabled
+                and risk == RiskLevel.LOW
+                and not unbounded_scope
+                and len(packet.allowed_paths) <= 4
+                and (packet.max_files or 3) <= 3
+            )
+            if not can_use_spark:
+                raise OrchestratorError(f"Selected worker lane is disabled: {worker}")
+            worker = "spark"
+            update["worker"] = worker
+        if worker == "spark" and packet.max_files is None:
             update["max_files"] = 3
         if not packet.stop_conditions:
             update["stop_conditions"] = [
@@ -955,10 +1261,19 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
             "review": review.model_dump(mode="json"),
             "risk": risk.value,
         }, task_id=task_id)
-        decision = await future
-        self._approval_futures.pop(task_id, None)
-        self.db.update_mission(self.mission_id, status=MissionState.RUNNING.value)
-        return bool(decision.get("approved"))
+        try:
+            decision = await future
+            await self._pause_gate.wait()
+            if self._stop_requested.is_set():
+                return False
+            self.db.update_mission(self.mission_id, status=MissionState.RUNNING.value)
+            await self._emit(
+                "mission.running",
+                {"mission_id": self.mission_id, "after_human_gate": True},
+            )
+            return bool(decision.get("approved"))
+        finally:
+            self._approval_futures.pop(task_id, None)
 
     def _record_usage(self, key: str, task_id: str, result: AgentResult) -> None:
         self.db.add_usage(
@@ -1004,10 +1319,21 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
         return "\n".join(lines)
 
     async def _fail_mission(self, exc: Exception) -> None:
-        message = f"{type(exc).__name__}: {exc}"
+        message = redact(f"{type(exc).__name__}: {exc}")
+        row = self._mission_row()
+        if row and row["status"] == MissionState.STOPPED.value:
+            return
         if self.mission_id:
-            self.db.update_mission(self.mission_id, status=MissionState.FAILED.value,
-                                   summary=message)
+            self._block_open_tasks(self.mission_id, message)
+            self.db.update_mission(
+                self.mission_id,
+                status=MissionState.FAILED.value,
+                summary=message,
+            )
+        for key, config in self.settings.agents.items():
+            rows = self.db.query("SELECT state FROM agents WHERE id=?", (config.id,))
+            if rows and rows[0]["state"] in _BUSY_AGENT_STATES:
+                await self._set_agent(key, AgentState.ERROR, error=message)
         await self._emit("mission.failed", {"error": message})
 
     @staticmethod

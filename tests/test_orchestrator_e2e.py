@@ -162,6 +162,7 @@ async def test_full_takeover_spark_limit_falls_back_to_luna_and_completes(
         task = orchestrator.db.query("SELECT * FROM tasks WHERE mission_id=?", (mission_id,))[0]
         assert mission["status"] == "completed"
         assert task["status"] == "accepted"
+        assert task["worker"] == "luna"
         assert task["attempt"] == 2
         assert orchestrator.workspace is not None
         assert (orchestrator.workspace.integration_path / "feature.py").read_text(

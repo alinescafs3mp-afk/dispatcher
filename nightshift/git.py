@@ -4,9 +4,9 @@ import fnmatch
 import os
 import shutil
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Iterable
 
 from .config import Settings
 from .models import RiskLevel
@@ -309,7 +309,7 @@ class MissionWorkspace:
 
     @classmethod
     def reopen(cls, settings: Settings, mission_id: str, mission_dir: Path,
-               integration_path: Path, integration_branch: str, base_sha: str) -> "MissionWorkspace":
+               integration_path: Path, integration_branch: str, base_sha: str) -> MissionWorkspace:
         obj = cls(settings, mission_id, mission_dir)
         obj.integration_path = integration_path
         obj.integration_branch = integration_branch
@@ -427,8 +427,8 @@ class MissionWorkspace:
         return git(tree.path, "rev-parse", "HEAD").strip()
 
     def worker_changed_files(self, tree: WorkerTree) -> list[str]:
-        out = git(tree.path, "diff", "--name-only", f"{tree.base_sha}..HEAD")
-        return [line.strip() for line in out.splitlines() if line.strip()]
+        out = git(tree.path, "diff", "--name-only", "-z", f"{tree.base_sha}..HEAD")
+        return [name for name in out.split("\0") if name]
 
     def worker_diff(self, tree: WorkerTree) -> str:
         return git(tree.path, "diff", "--binary", f"{tree.base_sha}..HEAD")

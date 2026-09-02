@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -36,6 +37,31 @@ class ScanRequest(BaseModel):
 
 class ReasoningRequest(BaseModel):
     effort: str = Field(min_length=1, max_length=32)
+
+
+def _default_port(scheme: str) -> int | None:
+    return 443 if scheme in {"https", "wss"} else 80 if scheme in {"http", "ws"} else None
+
+
+def _origin_allowed(origin: str, host: str, scheme: str = "http") -> bool:
+    """Accept non-browser clients and same-origin browser control requests."""
+    if not origin:
+        return True
+    if origin == "null" or not host:
+        return False
+    try:
+        parsed_origin = urlsplit(origin)
+        host_scheme = "https" if scheme in {"https", "wss"} else "http"
+        parsed_host = urlsplit(f"{host_scheme}://{host}")
+        origin_port = parsed_origin.port or _default_port(parsed_origin.scheme)
+        host_port = parsed_host.port or _default_port(host_scheme)
+    except ValueError:
+        return False
+    return (
+        parsed_origin.scheme in {"http", "https"}
+        and parsed_origin.hostname == parsed_host.hostname
+        and origin_port == host_port
+    )
 
 
 async def _safe_warmup(orchestrator: NightshiftOrchestrator) -> None:
@@ -90,6 +116,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.mount("/assets", StaticFiles(directory=static_dir), name="assets")
 
+    @app.middleware("http")
+    async def reject_cross_origin_controls(request: Request, call_next):
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not _origin_allowed(
+            request.headers.get("origin", ""),
+            request.headers.get("host", ""),
+            request.url.scheme,
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Cross-origin control request rejected"},
+            )
+        return await call_next(request)
+
     def orch() -> NightshiftOrchestrator:
         return app.state.orchestrator
 
@@ -123,7 +162,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/api/recovery/scan")
     async def recovery_scan(request: ScanRequest) -> dict[str, Any]:
         runtime = resolved.orchestrator.runtime_path
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
         scan_dir = runtime / "manual-scans" / stamp
         scan_dir.mkdir(parents=True, exist_ok=False)
         if request.include_quotas:
@@ -154,17 +193,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/mission/pause")
     async def pause_mission() -> dict[str, bool]:
-        await orch().pause()
+        try:
+            await orch().pause()
+        except OrchestratorError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True}
 
     @app.post("/api/mission/resume")
     async def continue_mission() -> dict[str, bool]:
-        await orch().resume()
+        try:
+            await orch().resume()
+        except OrchestratorError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True}
 
     @app.post("/api/mission/stop")
     async def stop_mission() -> dict[str, bool]:
-        await orch().stop()
+        try:
+            await orch().stop()
+        except OrchestratorError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True}
 
     @app.post("/api/tasks/{task_id}/decision")
@@ -193,6 +241,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.websocket("/ws")
     async def websocket(websocket: WebSocket) -> None:
+        if not _origin_allowed(
+            websocket.headers.get("origin", ""),
+            websocket.headers.get("host", ""),
+            websocket.url.scheme,
+        ):
+            await websocket.close(code=1008, reason="cross-origin websocket rejected")
+            return
         await websocket.accept()
         queue = await orch().hub.subscribe(replay=False)
         try:

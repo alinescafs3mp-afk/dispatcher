@@ -33,7 +33,7 @@ For an unknown or hostile repository:
 
 ## Dashboard exposure
 
-The dashboard has no authentication. Defaults bind to `127.0.0.1`. Do not bind it to `0.0.0.0`, a LAN address or a public interface without placing it behind authenticated TLS termination.
+The dashboard has no authentication. Defaults bind to `127.0.0.1`. Browser-originated state-changing HTTP requests and WebSocket connections are restricted to the dashboard origin as defence in depth, but this is not a substitute for authentication. Do not bind it to `0.0.0.0`, a LAN address or a public interface without placing it behind authenticated TLS termination.
 
 ## Subscription credentials
 

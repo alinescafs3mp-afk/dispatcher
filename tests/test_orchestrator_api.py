@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -20,7 +21,9 @@ def make_settings(repo: Path, tmp_path: Path):
 
 
 def test_packet_routing_and_human_gate(git_repo: Path, tmp_path: Path) -> None:
-    orch = NightshiftOrchestrator(make_settings(git_repo, tmp_path))
+    settings = make_settings(git_repo, tmp_path)
+    settings.agent("luna").enabled = True
+    orch = NightshiftOrchestrator(settings)
     try:
         broad = TaskPacket(
             title="broad", goal="investigate several modules", worker="spark",
@@ -39,7 +42,6 @@ def test_reasoning_validation_and_persistence(git_repo: Path, tmp_path: Path) ->
     settings = make_settings(git_repo, tmp_path)
     orch = NightshiftOrchestrator(settings)
     try:
-        import asyncio
         result = asyncio.run(orch.set_reasoning("grok", "high"))
         assert result["effort"] == "high"
         assert orch.db.get_preference("agent.grok.effort") == "high"

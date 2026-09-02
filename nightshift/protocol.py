@@ -47,17 +47,25 @@ def _balanced_objects(text: str) -> list[str]:
 
 
 def extract_json_dict(text: str) -> dict[str, Any]:
-    candidates: list[str] = []
-    candidates.extend(match.group(1) for match in _MARKER_RE.finditer(text))
-    candidates.extend(match.group(1) for match in _FENCE_RE.finditer(text))
-    candidates.extend(_balanced_objects(text))
-    for candidate in reversed(candidates):
-        try:
-            value = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
+    """Extract structured output with explicit markers taking precedence.
+
+    A model may mention other JSON objects after its marked decision. Those
+    objects must not override the Sol Link contract merely because they occur
+    later in the response.
+    """
+    groups = (
+        [match.group(1) for match in _MARKER_RE.finditer(text)],
+        [match.group(1) for match in _FENCE_RE.finditer(text)],
+        _balanced_objects(text),
+    )
+    for candidates in groups:
+        for candidate in reversed(candidates):
+            try:
+                value = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                return value
     raise ValueError("No valid JSON object found in model output")
 
 

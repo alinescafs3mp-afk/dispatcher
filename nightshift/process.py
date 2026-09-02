@@ -3,11 +3,15 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable
 
 LineCallback = Callable[[str, str], Awaitable[None]]
+
+# CLI JSONL events and model catalogs can legitimately exceed asyncio's 64 KiB
+# default StreamReader limit. Keep draining large records instead of deadlocking a child.
+SUBPROCESS_STREAM_LIMIT = 8 * 1024 * 1024
 
 
 @dataclass(slots=True)
@@ -41,6 +45,7 @@ class ProcessRunner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=(os.name != "nt"),
+                limit=SUBPROCESS_STREAM_LIMIT,
             )
         except OSError as exc:
             return ProcessResult(127, "", str(exc), command=command)
@@ -82,7 +87,7 @@ class ProcessRunner:
         cancelled = False
         try:
             await asyncio.wait_for(proc.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             timed_out = True
             await self._terminate(proc)
         except asyncio.CancelledError:
@@ -127,7 +132,7 @@ class ProcessRunner:
                 os.killpg(proc.pid, signal.SIGTERM)
             await asyncio.wait_for(proc.wait(), timeout=8)
             return
-        except (ProcessLookupError, asyncio.TimeoutError):
+        except (TimeoutError, ProcessLookupError):
             pass
         try:
             if os.name == "nt":

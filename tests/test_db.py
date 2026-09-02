@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from nightshift.db import StateDB
@@ -30,6 +29,19 @@ def test_task_json_is_redacted(tmp_path: Path) -> None:
         assert token not in task["packet_json"]
         assert token not in task["result_json"]
         assert token not in mission["goal"]
+    finally:
+        db.close()
+
+
+def test_task_worker_can_follow_runtime_fallback(tmp_path: Path) -> None:
+    db = StateDB(tmp_path / "state.sqlite3")
+    try:
+        db.create_mission("m", "/repo", "goal", "running")
+        db.create_task(
+            "m", "t", {"title": "x", "worker": "spark", "risk": "low"}, "ready"
+        )
+        db.update_task("t", worker="luna")
+        assert db.query("SELECT worker FROM tasks WHERE id='t'")[0]["worker"] == "luna"
     finally:
         db.close()
 

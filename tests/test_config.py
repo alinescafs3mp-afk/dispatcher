@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from nightshift.config import default_settings, load_settings, render_example, sanitized_child_env
