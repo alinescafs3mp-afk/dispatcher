@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - ".bootstrap/**"
+      - ".stage/READY"
 
 permissions:
   contents: write
@@ -18,20 +18,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: Rebuild verified source tree
-        run: |
-          if [ -d .bootstrap ]; then
-            python .bootstrap/materialize.py
-          else
-            echo "Source is already materialized."
-          fi
+        run: python .stage/materialize.py
       - name: Commit materialized source
         run: |
-          if git diff --quiet && git diff --cached --quiet; then
-            echo "No materialization changes."
-            exit 0
-          fi
           git config user.name "Friday Dispatcher Bootstrap"
           git config user.email "actions@users.noreply.github.com"
           git add -A
-          git commit -m "feat: add Friday emergency dispatcher"
+          git commit -m "feat: add Sol Link Nightshift orchestrator"
           git push
