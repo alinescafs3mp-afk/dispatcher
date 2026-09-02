@@ -1,0 +1,142 @@
+name: finalize-profiles
+
+on:
+  push:
+    branches:
+      - feature-combat-reserve-profiles
+    paths:
+      - '.profile-final/READY'
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Reconstruct exact final delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .profile-final/payload-*.b64 | tr -d '\n' | base64 --decode > /tmp/profile-final.patch.gz
+          echo '0ba7d885e2b68a9f51c3331e374cd4f78a2031bcb03ae8fb7892e915e8d71aaa  /tmp/profile-final.patch.gz' | sha256sum --check --strict
+          gzip -dc /tmp/profile-final.patch.gz > /tmp/profile-final.patch
+          echo 'c54254ad35c45d28258272dab797167da219ed9ee5464f9c90a60a71fe655cb1  /tmp/profile-final.patch' | sha256sum --check --strict
+
+      - name: Rebuild from the exact verified base tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git reset --hard d129cd39c33ef08c897805517e1f73b075e62044
+          git clean -fdx
+          test "$(git rev-parse HEAD^{tree})" = '14655ca7c59960f0e94373b814949b222a87b851'
+          git apply --check /tmp/profile-final.patch
+          git apply --index /tmp/profile-final.patch
+          test "$(git write-tree)" = '478cb94c76fe048c2cbb7d7cf4c9e08f2ab9e490'
+          test ! -e .github/workflows/apply-profiles.yml
+          test ! -e .github/workflows/finalize-profiles.yml
+          test ! -e .profile-final
+          git diff --cached --check
+
+      - name: Install development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Ruff
+        id: ruff
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          ruff check nightshift tests 2>&1 | tee ruff.log
+
+      - name: Pytest
+        id: pytest
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q --junitxml=pytest.xml 2>&1 | tee pytest.log
+
+      - name: Compile Python
+        id: compile
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m compileall -q nightshift tests 2>&1 | tee compile.log
+
+      - name: Check browser JavaScript
+        id: javascript
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          node --check nightshift/static/app.js 2>&1 | tee javascript.log
+
+      - name: Build package
+        id: build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m build 2>&1 | tee build.log
+
+      - name: Check staged tree hygiene
+        id: diff
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          git diff --cached --check 2>&1 | tee diff.log
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-final-diagnostics
+          path: |
+            ruff.log
+            pytest.log
+            pytest.xml
+            compile.log
+            javascript.log
+            build.log
+            diff.log
+          if-no-files-found: ignore
+
+      - name: Verification gate
+        if: always()
+        shell: bash
+        run: |
+          test '${{ steps.ruff.outcome }}' = success
+          test '${{ steps.pytest.outcome }}' = success
+          test '${{ steps.compile.outcome }}' = success
+          test '${{ steps.javascript.outcome }}' = success
+          test '${{ steps.build.outcome }}' = success
+          test '${{ steps.diff.outcome }}' = success
+
+      - name: Commit verified profile implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist build
+          find . -maxdepth 3 -type d -name '*.egg-info' -prune -exec rm -rf {} +
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -f ruff.log pytest.log pytest.xml compile.log javascript.log build.log diff.log
+          git add -A
+          test "$(git write-tree)" = '478cb94c76fe048c2cbb7d7cf4c9e08f2ab9e490'
+          git config user.name 'OpenAI profile builder'
+          git config user.email 'profile-builder@users.noreply.github.com'
+          git commit -m 'feat: add combat and reserve operating profiles'
+          git push --force-with-lease=refs/heads/${GITHUB_REF_NAME}:${GITHUB_SHA} origin "HEAD:${GITHUB_REF_NAME}"
