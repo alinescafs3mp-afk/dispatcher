@@ -3,9 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import shutil
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +15,14 @@ from .config import Settings
 from .db import StateDB
 from .events import EventHub
 from .forensics import ForensicsScanner
-from .git import (GitError, MissionWorkspace, WorkerTree, assess_risk,
-                  git, is_git_repo, path_violations)
+from .git import (
+    GitError,
+    MissionWorkspace,
+    assess_risk,
+    git,
+    is_git_repo,
+    path_violations,
+)
 from .models import (
     AgentResult,
     AgentState,
@@ -43,7 +48,6 @@ from .prompts import (
     worker_prompt,
 )
 from .protocol import compact_text, extract_json_dict
-from .redaction import redact, redact_value
 from .quota import (
     codex_effort_options,
     normalize_codex_quota,
@@ -52,6 +56,7 @@ from .quota import (
     read_configured_quota,
     read_grok_billing,
 )
+from .redaction import redact, redact_value
 from .validation import run_validation
 
 _BUSY_AGENT_STATES = {
@@ -473,7 +478,7 @@ class NightshiftOrchestrator:
             raise OrchestratorError(f"Repository does not exist: {repo}")
         if not is_git_repo(repo):
             raise OrchestratorError(f"Not a Git repository: {repo}")
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         self.mission_id = f"ns-{stamp}-{uuid.uuid4().hex[:6]}"
         self.mission_dir = self.runtime / "missions" / self.mission_id
         self.mission_dir.mkdir(parents=True, exist_ok=False)
@@ -931,7 +936,7 @@ Select exactly one safe continuation task, or declare completion only after the 
 Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object matching the standing directive. Do not add another JSON object."""
             repair = await self._run_grok(repair_prompt, cwd, f"{phase}-repair", read_only=True)
             if not repair.ok:
-                raise OrchestratorError(f"Architect output repair failed: {repair.error}")
+                raise OrchestratorError(f"Architect output repair failed: {repair.error}") from first_error
             decision = self._parse_architect_decision(repair.final_text)
         await self._emit("architect.decision", {
             "phase": phase,
@@ -1085,7 +1090,7 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                     phase="review-repair", read_only=True,
                 )
                 if not repair.ok:
-                    raise OrchestratorError("Review repair failed")
+                    raise OrchestratorError("Review repair failed") from exc
                 latest_review = self._parse_review(repair.final_text)
 
             # Deterministic boundaries outrank model acceptance.
@@ -1098,7 +1103,7 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
             if latest_review.action == "accept" and not validation.get("ok", False):
                 latest_review = latest_review.model_copy(update={
                     "action": "revise",
-                    "required_changes": latest_review.required_changes + ["Make configured validation pass or provide an explicit safe replacement command"],
+                    "required_changes": [*latest_review.required_changes, "Make configured validation pass or provide an explicit safe replacement command"],
                     "summary": "Model acceptance overridden because validation failed",
                 })
             self.db.update_task(task_id, review_json=latest_review.model_dump(mode="json"))
