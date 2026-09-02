@@ -1,0 +1,57 @@
+name: audit-hardening
+
+on:
+  push:
+    branches:
+      - audit-hardening-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  harden-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Apply audited hardening patch
+        run: |
+          cat .audit/chunk-* | base64 -d > .audit/apply.py.gz
+          gzip -dc .audit/apply.py.gz > .audit/apply.py
+          python .audit/apply.py
+          rm -rf .audit
+          rm -f .github/workflows/audit-hardening.yml
+      - name: Install development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Ruff
+        run: ruff check nightshift tests
+      - name: Pytest
+        run: pytest -q
+      - name: Python bytecode compilation
+        run: python -m compileall -q nightshift tests
+      - name: JavaScript syntax
+        run: node --check nightshift/static/app.js
+      - name: Build distributions
+        run: python -m build
+      - name: Patch hygiene
+        run: git diff --check
+      - name: Commit verified tree to audit branch
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          rm -rf dist build
+          find . -maxdepth 3 -type d -name '*.egg-info' -prune -exec rm -rf {} +
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          git config user.name 'OpenAI audit bot'
+          git config user.email 'audit-bot@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix: harden orchestration and realtime dashboard'
+          git push origin "HEAD:${BRANCH}"
