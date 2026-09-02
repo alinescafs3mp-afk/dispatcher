@@ -1,0 +1,442 @@
+
+===== ruff check nightshift tests =====
+RUF005 Consider `(*tuple(value for _, value in pairs), agent_id)` instead of concatenation
+   --> nightshift/db.py:162:64
+    |
+160 |         pairs.append(("updated_at", utc_now()))
+161 |         clause = ",".join(f"{key}=?" for key, _ in pairs)
+162 |         self.execute(f"UPDATE agents SET {clause} WHERE id=?", tuple(value for _, value in pairs) + (agent_id,))
+    |                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+163 |
+164 |     def create_mission(self, mission_id: str, repo: str, goal: str, status: str,
+    |
+help: Replace with `(*tuple(value for _, value in pairs), agent_id)`
+
+RUF005 Consider `(*tuple(value for _, value in pairs), mission_id)` instead of concatenation
+   --> nightshift/db.py:187:22
+    |
+185 |         clause = ",".join(f"{key}=?" for key, _ in pairs)
+186 |         self.execute(f"UPDATE missions SET {clause} WHERE id=?",
+187 |                      tuple(value for _, value in pairs) + (mission_id,))
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+188 |
+189 |     def create_task(self, mission_id: str, task_id: str, packet: dict[str, Any],
+    |
+help: Replace with `(*tuple(value for _, value in pairs), mission_id)`
+
+RUF005 Consider `(*tuple(value for _, value in pairs), task_id)` instead of concatenation
+   --> nightshift/db.py:216:22
+    |
+214 |         clause = ",".join(f"{key}=?" for key, _ in pairs)
+215 |         self.execute(f"UPDATE tasks SET {clause} WHERE id=?",
+216 |                      tuple(value for _, value in pairs) + (task_id,))
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+217 |
+218 |     def add_event(self, sender: str, recipient: str, event_type: str,
+    |
+help: Replace with `(*tuple(value for _, value in pairs), task_id)`
+
+invalid-syntax: missing closing quote in string literal
+   --> nightshift/orchestrator.py:629:38
+    |
+627 |         await self._emit("chat.message", {"role": "user", "text": text}, sender="human")
+628 |         digest = self._mission_digest() if self.mission_id else "No active Nightshift mission."
+629 |         prompt = chat_prompt(text) + "
+    |                                      ^
+630 |
+631 | Current compact mission ledger:
+    |
+
+invalid-syntax: Simple statements must be separated by newlines or semicolons
+   --> nightshift/orchestrator.py:631:9
+    |
+629 |         prompt = chat_prompt(text) + "
+630 |
+631 | Current compact mission ledger:
+    |         ^^^^^^^
+632 | " + compact_text(
+633 |             digest, 9000
+    |
+
+invalid-syntax: Simple statements must be separated by newlines or semicolons
+   --> nightshift/orchestrator.py:631:17
+    |
+629 |         prompt = chat_prompt(text) + "
+630 |
+631 | Current compact mission ledger:
+    |                 ^^^^^^^
+632 | " + compact_text(
+633 |             digest, 9000
+    |
+
+invalid-syntax: Simple statements must be separated by newlines or semicolons
+   --> nightshift/orchestrator.py:631:25
+    |
+629 |         prompt = chat_prompt(text) + "
+630 |
+631 | Current compact mission ledger:
+    |                         ^^^^^^
+632 | " + compact_text(
+633 |             digest, 9000
+    |
+
+invalid-syntax: Expected an expression
+   --> nightshift/orchestrator.py:631:32
+    |
+629 |         prompt = chat_prompt(text) + "
+630 |
+631 | Current compact mission ledger:
+    |                                ^
+632 | " + compact_text(
+633 |             digest, 9000
+    |
+
+invalid-syntax: missing closing quote in string literal
+   --> nightshift/orchestrator.py:632:1
+    |
+631 | Current compact mission ledger:
+632 | " + compact_text(
+    | ^^^^^^^^^^^^^^^^^
+633 |             digest, 9000
+634 |         )
+    |
+
+invalid-syntax: Unexpected indentation
+   --> nightshift/orchestrator.py:633:1
+    |
+631 | Current compact mission ledger:
+632 | " + compact_text(
+633 |             digest, 9000
+    | ^^^^^^^^^^^^
+634 |         )
+635 |         async with self.agent_locks["grok"]:
+    |
+
+invalid-syntax: unindent does not match any outer indentation level
+   --> nightshift/orchestrator.py:634:1
+    |
+632 | " + compact_text(
+633 |             digest, 9000
+634 |         )
+    | ^^^^^^^^
+635 |         async with self.agent_locks["grok"]:
+636 |             cwd = self.settings.project.repo_path
+    |
+
+invalid-syntax: Expected a statement
+   --> nightshift/orchestrator.py:634:9
+    |
+632 | " + compact_text(
+633 |             digest, 9000
+634 |         )
+    |         ^
+635 |         async with self.agent_locks["grok"]:
+636 |             cwd = self.settings.project.repo_path
+    |
+
+invalid-syntax: Expected a statement
+   --> nightshift/orchestrator.py:634:10
+    |
+632 | " + compact_text(
+633 |             digest, 9000
+634 |         )
+    |          ^
+635 |         async with self.agent_locks["grok"]:
+636 |             cwd = self.settings.project.repo_path
+    |
+
+invalid-syntax: Unexpected indentation
+   --> nightshift/orchestrator.py:635:1
+    |
+633 |             digest, 9000
+634 |         )
+635 |         async with self.agent_locks["grok"]:
+    | ^^^^^^^^
+636 |             cwd = self.settings.project.repo_path
+637 |             if self.workspace:
+    |
+
+invalid-syntax: f-string: unterminated string
+   --> nightshift/orchestrator.py:661:52
+    |
+659 |                     result = result.model_copy(update={
+660 |                         "ok": False,
+661 |                         "error": (result.error + f"
+    |                                                    ^
+662 | Architect worktree reset failed: {exc}").strip(),
+663 |                     })
+    |
+
+invalid-syntax: Expected FStringEnd, found name
+   --> nightshift/orchestrator.py:662:1
+    |
+660 |                         "ok": False,
+661 |                         "error": (result.error + f"
+662 | Architect worktree reset failed: {exc}").strip(),
+    | ^^^^^^^^^
+663 |                     })
+664 |             await self._set_agent(
+    |
+
+invalid-syntax: Expected `:`, found name
+   --> nightshift/orchestrator.py:662:11
+    |
+660 |                         "ok": False,
+661 |                         "error": (result.error + f"
+662 | Architect worktree reset failed: {exc}").strip(),
+    |           ^^^^^^^^
+663 |                     })
+664 |             await self._set_agent(
+    |
+
+invalid-syntax: Expected `,`, found name
+   --> nightshift/orchestrator.py:662:20
+    |
+660 |                         "ok": False,
+661 |                         "error": (result.error + f"
+662 | Architect worktree reset failed: {exc}").strip(),
+    |                    ^^^^^
+663 |                     })
+664 |             await self._set_agent(
+    |
+
+invalid-syntax: Expected `:`, found name
+   --> nightshift/orchestrator.py:662:26
+    |
+660 |                         "ok": False,
+661 |                         "error": (result.error + f"
+662 | Architect worktree reset failed: {exc}").strip(),
+    |                          ^^^^^^
+663 |                     })
+664 |             await self._set_agent(
+    |
+
+invalid-syntax: Expected `,`, found `:`
+   --> nightshift/orchestrator.py:662:32
+    |
+660 |                         "ok": False,
+661 |                         "error": (result.error + f"
+662 | Architect worktree reset failed: {exc}").strip(),
+    |                                ^
+663 |                     })
+664 |             await self._set_agent(
+    |
+
+invalid-syntax: missing closing quote in string literal
+   --> nightshift/orchestrator.py:662:39
+    |
+660 |                         "ok": False,
+661 |                         "error": (result.error + f"
+662 | Architect worktree reset failed: {exc}").strip(),
+    |                                       ^^^^^^^^^^^
+663 |                     })
+664 |             await self._set_agent(
+    |
+
+invalid-syntax: unindent does not match any outer indentation level
+   --> nightshift/orchestrator.py:679:1
+    |
+677 |         return answer
+678 |
+679 |     async def _run_new_mission(self, mission_id: str, goal: str) -> None:
+    | ^^^^
+680 |         try:
+681 |             self.db.update_mission(mission_id, status=MissionState.RECOVERING.value)
+    |
+
+invalid-syntax: unindent does not match any outer indentation level
+   --> nightshift/orchestrator.py:719:5
+    |
+717 |             await self._fail_mission(exc)
+718 |
+719 |     async def _run_resumed_mission(self, row: dict[str, Any]) -> None:
+    |     ^
+720 |         try:
+721 |             self.db.update_mission(self.mission_id, status=MissionState.RECOVERING.value,
+    |
+
+invalid-syntax: unindent does not match any outer indentation level
+   --> nightshift/orchestrator.py:765:5
+    |
+763 |             await self._fail_mission(exc)
+764 |
+765 |     async def _decision_loop(self, decision: Any) -> None:
+    |     ^
+766 |         completed_count = int(
+767 |             self.db.query(
+    |
+
+invalid-syntax: unindent does not match any outer indentation level
+   --> nightshift/orchestrator.py:811:5
+    |
+809 |             raise OrchestratorError(f"Unsupported architect decision: {type(decision).__name__}")
+810 |
+811 |     async def _recover_predecessors(self, dossier: dict[str, Any]) -> dict[str, str]:
+    |     ^
+812 |         if not self.settings.orchestrator.recover_predecessor_sessions:
+813 |             await self._emit("recovery.predecessor_sessions_skipped", {"configured": False})
+    |
+
+invalid-syntax: unindent does not match any outer indentation level
+   --> nightshift/orchestrator.py:862:1
+    |
+860 |         return handoffs
+861 |
+862 |     @staticmethod
+    | ^^^^
+863 |     def _append_handoffs_to_dossier(path: Path, handoffs: dict[str, str]) -> None:
+864 |         if not handoffs:
+    |
+
+invalid-syntax: Expected class, function definition or async function definition after decorator
+   --> nightshift/orchestrator.py:863:1
+    |
+862 |     @staticmethod
+863 |     def _append_handoffs_to_dossier(path: Path, handoffs: dict[str, str]) -> None:
+    | ^^^^
+864 |         if not handoffs:
+865 |             return
+    |
+
+invalid-syntax: missing closing quote in string literal
+   --> nightshift/orchestrator.py:879:21
+    |
+877 |                 prompt = (
+878 |                     "This is a rotated architect session. Reconstruct continuity from the repository, "
+879 |                     "Nightshift ledger, and the prompt below. The emergency directive remains binding.
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+880 |
+881 | "
+    |
+
+invalid-syntax: missing closing quote in string literal
+   --> nightshift/orchestrator.py:881:1
+    |
+879 |                     "Nightshift ledger, and the prompt below. The emergency directive remains binding.
+880 |
+881 | "
+    | ^
+882 |                     + prompt
+883 |                 )
+    |
+
+invalid-syntax: f-string: unterminated string
+   --> nightshift/orchestrator.py:911:52
+    |
+909 |                     result = result.model_copy(update={
+910 |                         "ok": False,
+911 |                         "error": (result.error + f"
+    |                                                    ^
+912 | Architect worktree reset failed: {exc}").strip(),
+913 |                     })
+    |
+
+invalid-syntax: Expected FStringEnd, found name
+   --> nightshift/orchestrator.py:912:1
+    |
+910 |                         "ok": False,
+911 |                         "error": (result.error + f"
+912 | Architect worktree reset failed: {exc}").strip(),
+    | ^^^^^^^^^
+913 |                     })
+914 |             await self._set_agent(
+    |
+
+invalid-syntax: Expected `:`, found name
+   --> nightshift/orchestrator.py:912:11
+    |
+910 |                         "ok": False,
+911 |                         "error": (result.error + f"
+912 | Architect worktree reset failed: {exc}").strip(),
+    |           ^^^^^^^^
+913 |                     })
+914 |             await self._set_agent(
+    |
+
+invalid-syntax: Expected `,`, found name
+   --> nightshift/orchestrator.py:912:20
+    |
+910 |                         "ok": False,
+911 |                         "error": (result.error + f"
+912 | Architect worktree reset failed: {exc}").strip(),
+    |                    ^^^^^
+913 |                     })
+914 |             await self._set_agent(
+    |
+
+invalid-syntax: Expected `:`, found name
+   --> nightshift/orchestrator.py:912:26
+    |
+910 |                         "ok": False,
+911 |                         "error": (result.error + f"
+912 | Architect worktree reset failed: {exc}").strip(),
+    |                          ^^^^^^
+913 |                     })
+914 |             await self._set_agent(
+    |
+
+invalid-syntax: Expected `,`, found `:`
+   --> nightshift/orchestrator.py:912:32
+    |
+910 |                         "ok": False,
+911 |                         "error": (result.error + f"
+912 | Architect worktree reset failed: {exc}").strip(),
+    |                                ^
+913 |                     })
+914 |             await self._set_agent(
+    |
+
+invalid-syntax: missing closing quote in string literal
+   --> nightshift/orchestrator.py:912:39
+    |
+910 |                         "ok": False,
+911 |                         "error": (result.error + f"
+912 | Architect worktree reset failed: {exc}").strip(),
+    |                                       ^^^^^^^^^^^
+913 |                     })
+914 |             await self._set_agent(
+    |
+
+invalid-syntax: Expected dedent, found end of file
+    --> nightshift/orchestrator.py:1348:23
+     |
+1347 |                 result.append(value)
+1348 |         return result
+     |                      ^
+
+RUF059 Unpacked variable `next_id` is never used
+   --> nightshift/quota.py:411:35
+    |
+409 |         initialized = await receive(1)
+410 |         try:
+411 |             data, billing_method, next_id = await billing_any(2)
+    |                                   ^^^^^^^
+412 |             return {
+413 |                 "initialize": initialized,
+    |
+help: Prefix it with an underscore or any other dummy variable pattern
+
+SIM102 Use a single `if` statement instead of nested `if` statements
+   --> nightshift/sessions.py:100:9
+    |
+ 98 |               if text:
+ 99 |                   users.append(text)
+100 | /         elif subtype in {"agent_message", "assistant_message", "assistant"} or role == "assistant":
+101 | |             if text:
+    | |____________________^
+102 |                   assistants.append(text)
+103 |       if not session_id:
+    |
+help: Combine `if` statements using `and`
+
+B023 Function definition does not bind loop variable `lines`
+  --> nightshift/validation.py:66:13
+   |
+65 |         async def on_line(stream: str, line: str) -> None:
+66 |             lines.append(f"[{stream}] {line}")
+   |             ^^^^^
+67 |             await event("log", {"stream": f"validation-{stream}", "text": line})
+   |
+
+Found 40 errors.
+No fixes available (4 hidden fixes can be enabled with the `--unsafe-fixes` option).
