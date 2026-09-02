@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sol Link Nightshift Task Packet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "goal", "worker", "allowed_paths", "forbidden_paths", "acceptance_criteria", "validation_commands", "risk"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "title": {"type": "string", "minLength": 1},
+    "goal": {"type": "string", "minLength": 1},
+    "worker": {"enum": ["luna", "spark"]},
+    "context": {"type": "string"},
+    "source_ref": {"type": "string"},
+    "architectural_intent": {"type": "string"},
+    "allowed_paths": {"type": "array", "items": {"type": "string"}},
+    "forbidden_paths": {"type": "array", "items": {"type": "string"}},
+    "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
+    "validation_commands": {"type": "array", "items": {"type": "string"}},
+    "stop_conditions": {"type": "array", "items": {"type": "string"}},
+    "risk": {"enum": ["low", "medium", "high", "critical"]},
+    "max_files": {"type": ["integer", "null"], "minimum": 1}
+  }
+}

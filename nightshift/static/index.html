@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sol Link Nightshift</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="noise"></div>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">SOL LINK / EMERGENCY CONTINUITY</div>
+      <h1>Nightshift <span>control room</span></h1>
+    </div>
+    <div class="header-actions">
+      <span id="socketBadge" class="badge muted">linking…</span>
+      <button id="doctorBtn" class="ghost">Doctor</button>
+      <button id="quotaBtn" class="ghost">Refresh limits</button>
+      <a class="ghost button-link" href="/api/directive">Directive ↧</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="mission-panel glass">
+      <div class="mission-heading">
+        <div>
+          <div class="eyebrow">MISSION</div>
+          <h2 id="missionTitle">No active takeover</h2>
+          <p id="missionMeta" class="muted-text">Point Nightshift at Friday and start from the exact interrupted state.</p>
+        </div>
+        <div class="mission-controls">
+          <button id="pauseBtn" class="ghost" disabled>Pause</button>
+          <button id="resumeBtn" class="ghost" disabled>Continue</button>
+          <button id="stopBtn" class="danger" disabled>Stop</button>
+        </div>
+      </div>
+      <div class="mission-launch">
+        <textarea id="goalInput" rows="2" placeholder="Goal, for example: Recover Sol/SolGoodman work and finish the reconciled Friday backlog to completion."></textarea>
+        <button id="startBtn" class="primary">Begin takeover</button>
+        <button id="resumeInterruptedBtn" class="ghost" hidden>Resume preserved mission</button>
+      </div>
+      <div id="missionPaths" class="path-strip"></div>
+    </section>
+
+    <section class="agents-grid">
+      <article class="agent-card glass" data-key="grok">
+        <div class="agent-head">
+          <div><div class="eyebrow">CHIEF ARCHITECT</div><h3>Grok 4.6 <span data-role="effort-badge">xhigh</span></h3></div>
+          <span class="state-dot"><i></i><b data-role="state">offline</b></span>
+        </div>
+        <div class="agent-facts"><span data-role="model">grok-4.6</span><span data-role="usage">0 tokens</span></div>
+        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Grok reasoning"></select><small>next turn</small></label>
+        <div class="quota-zone" data-role="quotas"></div>
+        <div class="console-title"><span>grok-build</span><button data-role="clear-log" class="tiny">clear view</button></div>
+        <pre class="console" data-role="console"></pre>
+      </article>
+
+      <article class="agent-card glass" data-key="luna">
+        <div class="agent-head">
+          <div><div class="eyebrow">IMPLEMENTATION OWNER</div><h3>Codex <span>Luna</span></h3></div>
+          <span class="state-dot"><i></i><b data-role="state">offline</b></span>
+        </div>
+        <div class="agent-facts"><span data-role="model">gpt-5.6-luna</span><span data-role="usage">0 tokens</span></div>
+        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Luna reasoning"></select><small>next turn</small></label>
+        <div class="quota-zone" data-role="quotas"></div>
+        <div class="console-title"><span>codex-solgoodman</span><button data-role="clear-log" class="tiny">clear view</button></div>
+        <pre class="console" data-role="console"></pre>
+      </article>
+
+      <article class="agent-card glass" data-key="spark">
+        <div class="agent-head">
+          <div><div class="eyebrow">MICRO WORKER</div><h3>Codex <span>Spark</span></h3></div>
+          <span class="state-dot"><i></i><b data-role="state">offline</b></span>
+        </div>
+        <div class="agent-facts"><span data-role="model">gpt-5.3-codex-spark</span><span data-role="usage">0 tokens</span></div>
+        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Spark reasoning"></select><small>next turn</small></label>
+        <div class="quota-zone" data-role="quotas"></div>
+        <div class="console-title"><span>codex</span><button data-role="clear-log" class="tiny">clear view</button></div>
+        <pre class="console" data-role="console"></pre>
+      </article>
+    </section>
+
+    <section class="work-grid">
+      <article class="ledger glass">
+        <div class="section-head"><div><div class="eyebrow">SOL LINK LEDGER</div><h2>Task packets</h2></div><span id="taskCount" class="badge">0</span></div>
+        <div id="humanGate" class="human-gate" hidden></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Task</th><th>Worker</th><th>State</th><th>Risk</th><th>Attempt</th></tr></thead>
+            <tbody id="taskRows"><tr><td colspan="5" class="empty">No task packets yet.</td></tr></tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="chat glass">
+        <div class="section-head"><div><div class="eyebrow">DIRECT LINE</div><h2>Talk to the architect</h2></div><span class="badge">read-only</span></div>
+        <div id="chatMessages" class="chat-messages"><div class="empty">Messages to Grok appear here. Chat does not silently dispatch work.</div></div>
+        <form id="chatForm" class="chat-form">
+          <textarea id="chatInput" rows="2" placeholder="Ask what happened, why a task was routed, or give an explicit steering instruction."></textarea>
+          <button class="primary" type="submit">Send</button>
+        </form>
+      </article>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

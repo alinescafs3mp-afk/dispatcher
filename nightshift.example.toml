@@ -1,0 +1,80 @@
+# Sol Link Nightshift configuration
+
+[server]
+host = "127.0.0.1"
+port = 8787
+open_browser = true
+
+[project]
+repo = "/absolute/path/to/friday"
+backlog_globs = ["BACKLOG*.md", "**/BACKLOG*.md", "TODO*.md", "**/TODO*.md", "ROADMAP*.md", "**/ROADMAP*.md", "HANDOFF*.md", "**/HANDOFF*.md", "outer_sol/**/*.md", "handoffs/**/*.md", ".sol-link/**/*.md"]
+validation_commands = []
+protected_paths = [".git/**", ".env", ".env.*", "**/*.pem", "**/*.key", "**/*.token"]
+high_risk_paths = ["**/migrations/**", "**/security/**", "**/auth/**", "**/sandbox/**", "**/engineer_mode/**", "**/permissions/**"]
+session_search_roots = ["~/.codex/sessions", "~/.config/codex-multi/profiles/*/sessions"]
+
+[orchestrator]
+runtime_dir = "~/.local/state/sol-link-nightshift"
+max_tasks = 100
+max_revisions = 2
+architect_session_max_turns = 16
+recover_predecessor_sessions = true
+continue_until_backlog_done = true
+auto_accept_low_risk = true
+auto_accept_medium_risk = false
+require_human_for_high_risk = true
+copy_untracked_max_file_mb = 25
+copy_untracked_total_mb = 250
+log_tail_lines = 1000
+command_timeout_seconds = 3600
+poll_seconds = 1.0
+
+[agents.grok]
+id = "grok-architect"
+role = "temporary chief architect and reviewer"
+binary_candidates = ["grok-build", "grok"]
+model = "grok-4.6"
+effort = "xhigh"
+effort_options = ["low", "medium", "high", "xhigh"]
+strip_env = ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]
+scrub_sensitive_env = true
+timeout_seconds = 7200
+max_turns = 80
+extra_args = []
+quota_command = []
+inherit_previous_session = false
+enabled = true
+unsafe_full_access = false
+
+[agents.spark]
+id = "codex-spark"
+role = "micro-implementation worker"
+binary_candidates = ["codex"]
+model = "gpt-5.3-codex-spark"
+effort = "high"
+effort_options = ["low", "medium", "high", "xhigh"]
+strip_env = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AZURE_OPENAI_API_KEY", "OPENAI_BASE_URL"]
+scrub_sensitive_env = true
+timeout_seconds = 7200
+extra_args = []
+quota_command = []
+inherit_previous_session = true
+enabled = true
+unsafe_full_access = false
+
+[agents.luna]
+id = "codex-luna"
+role = "implementation owner and debugger"
+binary_candidates = ["codex-solgoodman"]
+# Explicit by default. Set to an empty string only when your wrapper selects Luna itself.
+model = "gpt-5.6-luna"
+effort = "max"
+effort_options = ["none", "low", "medium", "high", "xhigh", "max"]
+strip_env = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AZURE_OPENAI_API_KEY", "OPENAI_BASE_URL"]
+scrub_sensitive_env = true
+timeout_seconds = 7200
+extra_args = []
+quota_command = []
+inherit_previous_session = true
+enabled = true
+unsafe_full_access = false

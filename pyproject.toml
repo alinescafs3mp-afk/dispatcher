@@ -1,15 +1,28 @@
 [build-system]
-requires = ["setuptools>=75"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "friday-emergency-dispatcher"
-version = "0.1.0"
-description = "Subscription-backed Grok, Luna and Codex Spark emergency orchestrator"
+name = "sol-link-nightshift"
+version = "0.2.0"
+description = "Subscription-backed emergency orchestrator for Grok Build, Codex Luna, and Codex Spark"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
-license = {text = "MIT"}
-authors = [{name = "Friday Dispatcher contributors"}]
+authors = [
+  { name = "Aline Ramalhinho" },
+]
+keywords = ["codex", "grok", "orchestrator", "agents", "git-worktree"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Web Environment",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Build Tools",
+]
 dependencies = [
   "fastapi>=0.116,<1",
   "uvicorn[standard]>=0.35,<1",
@@ -18,22 +31,37 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.4,<9",
-  "pytest-asyncio>=1.1,<2",
+  "build>=1.2,<2",
   "httpx>=0.28,<1",
+  "pytest>=8.4,<10",
+  "pytest-asyncio>=1.1,<2",
+  "ruff>=0.12,<1",
 ]
 
 [project.scripts]
-friday-dispatcher = "dispatcher:main"
+nightshift = "nightshift.__main__:main"
+dispatcher = "nightshift.__main__:main"
 
-[tool.setuptools]
-py-modules = ["dispatcher", "dispatcher_hardening"]
+[project.urls]
+Homepage = "https://github.com/alinescafs3mp-afk/dispatcher"
+Repository = "https://github.com/alinescafs3mp-afk/dispatcher"
+
+[tool.setuptools.packages.find]
+include = ["nightshift*"]
+
+[tool.setuptools.package-data]
+nightshift = ["static/*", "data/*"]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
 testpaths = ["tests"]
+addopts = "-q"
 asyncio_mode = "auto"
 
 [tool.ruff]
 target-version = "py311"
-line-length = 120
+line-length = 100
+extend-exclude = ["dist", "build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+ignore = ["E501"]
