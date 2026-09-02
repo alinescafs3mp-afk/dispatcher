@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS missions (
     status TEXT NOT NULL,
     profile TEXT NOT NULL DEFAULT 'reserve',
     profile_options_json TEXT NOT NULL DEFAULT '{}',
+    architect_session_id TEXT NOT NULL DEFAULT '',
+    architect_turns INTEGER NOT NULL DEFAULT 0,
     base_sha TEXT NOT NULL DEFAULT '',
     integration_branch TEXT NOT NULL DEFAULT '',
     integration_path TEXT NOT NULL DEFAULT '',
@@ -129,6 +131,8 @@ class StateDB:
             "missions": {
                 "profile": "TEXT NOT NULL DEFAULT 'reserve'",
                 "profile_options_json": "TEXT NOT NULL DEFAULT '{}'",
+                "architect_session_id": "TEXT NOT NULL DEFAULT ''",
+                "architect_turns": "INTEGER NOT NULL DEFAULT 0",
             },
             "chat": {
                 "agent_key": "TEXT NOT NULL DEFAULT 'grok'",
@@ -257,7 +261,8 @@ class StateDB:
 
     def update_mission(self, mission_id: str, **fields: Any) -> None:
         allowed = {
-            "status", "profile", "profile_options_json", "base_sha",
+            "status", "profile", "profile_options_json",
+            "architect_session_id", "architect_turns", "base_sha",
             "integration_branch", "integration_path", "directive_path",
             "forensics_path", "summary",
         }

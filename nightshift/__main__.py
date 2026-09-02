@@ -128,9 +128,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         host = args.host or settings.server.host
         port = args.port or settings.server.port
+        if host in {"0.0.0.0", "::", "[::]"} and not settings.server.allowed_hosts:
+            raise SystemExit(
+                "Wildcard dashboard binding requires at least one exact "
+                "server.allowed_hosts entry."
+            )
+        # create_app must see the effective CLI override so Host validation matches
+        # the socket Uvicorn actually opens.
+        settings.server.host = host
+        settings.server.port = port
         should_open = settings.server.open_browser and not args.no_browser
-        url = f"http://{host}:{port}"
-        if should_open and host in {"127.0.0.1", "localhost"}:
+        url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        url = f"http://{url_host}:{port}"
+        if should_open and host in {"127.0.0.1", "localhost", "::1", "[::1]"}:
             # Uvicorn starts immediately after this; browser retries while the socket opens.
             import threading
             timer = threading.Timer(0.8, lambda: webbrowser.open(url))

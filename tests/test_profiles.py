@@ -23,6 +23,7 @@ from nightshift.profiles import get_profile, profile_prompt_context, resolve_pro
 def make_settings(repo: Path, tmp_path: Path):
     settings = default_settings(str(repo))
     settings.orchestrator.runtime_dir = str(tmp_path / "runtime")
+    settings.server.allowed_hosts = ["testserver"]
     for config in settings.agents.values():
         config.binary_candidates = [str(tmp_path / "missing")]
     return settings
@@ -524,7 +525,12 @@ def test_additive_database_migration_accepts_pre_profile_schema(tmp_path: Path) 
     try:
         mission_columns = {row["name"] for row in db.query("PRAGMA table_info(missions)")}
         chat_columns = {row["name"] for row in db.query("PRAGMA table_info(chat)")}
-        assert {"profile", "profile_options_json"} <= mission_columns
+        assert {
+            "profile",
+            "profile_options_json",
+            "architect_session_id",
+            "architect_turns",
+        } <= mission_columns
         assert {
             "agent_key",
             "agent_id",

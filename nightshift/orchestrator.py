@@ -1051,16 +1051,9 @@ class NightshiftOrchestrator:
             self._stop_requested.clear()
             self._pause_gate.set()
             self._approval_futures.clear()
-            agent_rows = self.db.query(
-                "SELECT session_id FROM agents WHERE id=?",
-                (self.settings.agent("grok").id,),
-            )
-            self._grok_session_id = (
-                agent_rows[0]["session_id"]
-                if agent_rows and agent_rows[0]["session_id"]
-                else None
-            )
-            self._grok_turns = 0
+            mission_session = str(row.get("architect_session_id") or "").strip()
+            self._grok_session_id = mission_session or None
+            self._grok_turns = max(0, int(row.get("architect_turns") or 0))
             self._decision_counter = int(
                 self.db.query(
                     "SELECT COUNT(*) AS count FROM tasks WHERE mission_id=?",
@@ -1592,6 +1585,12 @@ class NightshiftOrchestrator:
             if self._grok_turns >= self.settings.orchestrator.architect_session_max_turns:
                 self._grok_session_id = None
                 self._grok_turns = 0
+                if self.mission_id:
+                    self.db.update_mission(
+                        self.mission_id,
+                        architect_session_id="",
+                        architect_turns=0,
+                    )
                 prompt = (
                     "This is a rotated architect session. Reconstruct continuity from "
                     "the repository, durable Sol Link ledger, and the prompt below. "
@@ -1624,6 +1623,12 @@ class NightshiftOrchestrator:
                 )
             self._grok_session_id = result.session_id or self._grok_session_id
             self._grok_turns += 1
+            if self.mission_id:
+                self.db.update_mission(
+                    self.mission_id,
+                    architect_session_id=self._grok_session_id or "",
+                    architect_turns=self._grok_turns,
+                )
             self._record_usage("grok", phase, result)
             if self.workspace:
                 try:
@@ -2016,14 +2021,21 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
         if current == "spark" and self.settings.agent("luna").enabled:
             return "luna"
         secondary_max_files = 5 if self.profile_id == "combat" else 3
+        secondary_max_paths = 6 if self.profile_id == "combat" else 4
         risk_ok = (
             packet.risk in {RiskLevel.LOW, RiskLevel.MEDIUM}
             if self.profile_id == "combat"
             else packet.risk == RiskLevel.LOW
         )
+        unbounded_scope = any(
+            path.strip() in _UNBOUNDED_SCOPE_PATTERNS
+            for path in packet.allowed_paths
+        )
         if (
             current == "luna"
             and risk_ok
+            and not unbounded_scope
+            and len(packet.allowed_paths) <= secondary_max_paths
             and (packet.max_files or secondary_max_files) <= secondary_max_files
             and self.settings.agent("spark").enabled
         ):

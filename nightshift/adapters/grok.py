@@ -29,7 +29,7 @@ def _first_text(obj: Any) -> str:
         return "".join(_first_text(item) for item in obj)
     if not isinstance(obj, dict):
         return ""
-    for key in ("text", "delta", "result", "message", "content"):
+    for key in ("text", "delta", "result", "message", "content", "data"):
         value = obj.get(key)
         if isinstance(value, str) and value:
             return value
@@ -43,6 +43,13 @@ def _first_text(obj: Any) -> str:
     return ""
 
 
+def _safe_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def _usage_from(obj: dict[str, Any]) -> Usage | None:
     raw = obj.get("usage")
     if not isinstance(raw, dict):
@@ -50,25 +57,53 @@ def _usage_from(obj: dict[str, Any]) -> Usage | None:
         raw = result.get("usage") if isinstance(result, dict) else None
     if not isinstance(raw, dict):
         return None
+
+    input_value = raw.get("input_tokens")
+    if input_value is None:
+        input_value = raw.get("inputTokens")
+    if input_value is None:
+        input_value = raw.get("prompt_tokens", 0)
+
+    output_value = raw.get("output_tokens")
+    if output_value is None:
+        output_value = raw.get("outputTokens")
+    if output_value is None:
+        output_value = raw.get("completion_tokens", 0)
+
+    cache_keys = (
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "cacheReadInputTokens",
+        "cacheCreationInputTokens",
+    )
+    if any(raw.get(key) is not None for key in cache_keys):
+        cached_value = sum(_safe_int(raw.get(key)) for key in cache_keys)
+    elif raw.get("cached_input_tokens") is not None:
+        cached_value = _safe_int(raw.get("cached_input_tokens"))
+    else:
+        details = raw.get("prompt_tokens_details")
+        cached_value = (
+            _safe_int(details.get("cached_tokens"))
+            if isinstance(details, dict)
+            else 0
+        )
+
+    reasoning_value = raw.get("reasoning_tokens")
+    if reasoning_value is None:
+        reasoning_value = raw.get("reasoningTokens")
+    if reasoning_value is None:
+        details = raw.get("completion_tokens_details")
+        reasoning_value = (
+            details.get("reasoning_tokens", 0)
+            if isinstance(details, dict)
+            else 0
+        )
+
     return Usage(
-        input_tokens=int(raw.get("input_tokens", raw.get("prompt_tokens", 0)) or 0),
-        cached_input_tokens=int(
-            raw.get("cached_input_tokens", 0)
-            or (
-                (raw.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
-                if isinstance(raw.get("prompt_tokens_details"), dict)
-                else 0
-            )
-        ),
-        output_tokens=int(raw.get("output_tokens", raw.get("completion_tokens", 0)) or 0),
-        reasoning_tokens=int(
-            raw.get("reasoning_tokens", 0)
-            or (
-                (raw.get("completion_tokens_details") or {}).get("reasoning_tokens", 0)
-                if isinstance(raw.get("completion_tokens_details"), dict)
-                else 0
-            )
-        ),
+        input_tokens=_safe_int(input_value),
+        cached_input_tokens=cached_value,
+        output_tokens=_safe_int(output_value),
+        reasoning_tokens=_safe_int(reasoning_value),
     )
 
 
@@ -118,6 +153,8 @@ class GrokAdapter(AgentAdapter):
         if not self.binary:
             return AgentResult(ok=False, returncode=127, error="Grok Build binary not found")
         actual_session = session_id or str(uuid.uuid4())
+        streamed_session = actual_session
+        streamed_error = ""
         final_chunks: list[str] = []
         usage = Usage()
         raw_events = 0
@@ -126,6 +163,7 @@ class GrokAdapter(AgentAdapter):
 
         async def on_line(stream: str, line: str) -> None:
             nonlocal usage, raw_events, limit_detected
+            nonlocal streamed_session, streamed_error
             if limit_like(line):
                 limit_detected = True
             if stream == "stderr":
@@ -136,17 +174,66 @@ class GrokAdapter(AgentAdapter):
             except json.JSONDecodeError:
                 await event("log", {"stream": stream, "text": line})
                 return
+            if not isinstance(obj, dict):
+                await event("event", {"kind": "non_object_json"})
+                return
+
             raw_events += 1
             maybe_usage = _usage_from(obj)
             if maybe_usage:
                 usage = maybe_usage
-            event_type = str(obj.get("type") or obj.get("event") or obj.get("method") or "event")
+            candidate_session = obj.get("sessionId") or obj.get("session_id")
+            if isinstance(candidate_session, str) and candidate_session:
+                streamed_session = candidate_session
+
+            event_type = str(
+                obj.get("type") or obj.get("event") or obj.get("method") or "event"
+            )
+            lowered_type = event_type.casefold()
+
+            if lowered_type == "text":
+                text = obj.get("data")
+                if isinstance(text, str) and text:
+                    final_chunks.append(text)
+                    await event("assistant_delta", {"text": text})
+                else:
+                    await event("event", {"kind": event_type})
+                return
+
+            if lowered_type == "error":
+                message = _first_text(obj).strip() or "Grok stream reported an error"
+                streamed_error = message
+                await event("log", {"stream": "stderr", "text": message})
+                return
+
+            if lowered_type == "max_turns_reached":
+                streamed_error = "Grok reached its configured maximum turns"
+                await event("log", {"stream": "stderr", "text": streamed_error})
+                return
+
+            if lowered_type == "end":
+                stop_reason = str(
+                    obj.get("stopReason") or obj.get("stop_reason") or ""
+                ).casefold()
+                if stop_reason in {"cancelled", "refusal", "max_turn_requests"}:
+                    streamed_error = f"Grok stopped with reason: {stop_reason}"
+                await event("event", {"kind": event_type})
+                return
+
             text = _first_text(obj)
             assistant_like = any(
-                token in event_type.lower()
-                for token in ("assistant", "agent_message", "message_chunk", "result", "final")
+                token in lowered_type
+                for token in (
+                    "assistant",
+                    "agent_message",
+                    "message_chunk",
+                    "result",
+                    "final",
+                )
             )
-            if (text and assistant_like) or (text and event_type.lower() in {"event", "output"}):
+            if (text and assistant_like) or (
+                text and lowered_type in {"event", "output"}
+            ):
                 final_chunks.append(text)
                 await event("assistant_delta", {"text": text})
             else:
@@ -173,6 +260,8 @@ class GrokAdapter(AgentAdapter):
                 },
             )
             actual_session = str(uuid.uuid4())
+            streamed_session = actual_session
+            streamed_error = ""
             final_chunks.clear()
             usage = Usage()
             raw_events = 0
@@ -189,6 +278,7 @@ class GrokAdapter(AgentAdapter):
             combined = (result.stdout + "\n" + result.stderr).strip()
         if limit_like(combined):
             limit_detected = True
+
         final_text = "".join(final_chunks).strip()
         if not final_text and result.stdout.strip():
             lines = [line for line in result.stdout.splitlines() if line.strip()]
@@ -199,20 +289,49 @@ class GrokAdapter(AgentAdapter):
                     if not final_text:
                         final_text = line
                     continue
-                text = _first_text(obj)
-                if text:
+                if not isinstance(obj, dict):
+                    continue
+                event_type = str(
+                    obj.get("type") or obj.get("event") or obj.get("method") or "event"
+                ).casefold()
+                if event_type == "text":
+                    text = obj.get("data")
+                elif any(
+                    token in event_type
+                    for token in (
+                        "assistant",
+                        "agent_message",
+                        "message_chunk",
+                        "result",
+                        "final",
+                    )
+                ):
+                    text = _first_text(obj)
+                else:
+                    text = ""
+                if isinstance(text, str) and text:
                     final_text = text
                     break
+
         error = ""
         if result.timed_out:
             error = f"Grok timed out after {self.config.timeout_seconds}s"
+        elif streamed_error:
+            error = streamed_error[-2000:]
         elif result.returncode != 0:
-            error = (result.stderr or result.stdout)[-2000:] or f"Grok exited with {result.returncode}"
+            error = (
+                (result.stderr or result.stdout)[-2000:]
+                or f"Grok exited with {result.returncode}"
+            )
         return AgentResult(
-            ok=result.returncode == 0 and not result.timed_out,
+            ok=(
+                result.returncode == 0
+                and not result.timed_out
+                and not streamed_error
+            ),
             returncode=result.returncode,
             final_text=final_text,
-            session_id=actual_session,
+            session_id=streamed_session,
             usage=usage,
             limit_detected=limit_detected,
             error=error,

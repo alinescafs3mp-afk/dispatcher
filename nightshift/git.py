@@ -332,7 +332,7 @@ class MissionWorkspace:
     def sync_architect_worktree(self) -> Path:
         self.create_architect_worktree()
         git(self.architect_path, "reset", "--hard", self.integration_head())
-        git(self.architect_path, "clean", "-fd", check=False)
+        git(self.architect_path, "clean", "-ffdx", check=False)
         return self.architect_path
 
     def create_worker(self, task_id: str, worker: str) -> WorkerTree:
@@ -427,33 +427,89 @@ class MissionWorkspace:
         return git(tree.path, "rev-parse", "HEAD").strip()
 
     def worker_changed_files(self, tree: WorkerTree) -> list[str]:
-        out = git(tree.path, "diff", "--name-only", "-z", f"{tree.base_sha}..HEAD")
+        out = git(
+            tree.path,
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            f"{tree.base_sha}..HEAD",
+        )
         return [name for name in out.split("\0") if name]
 
     def worker_diff(self, tree: WorkerTree) -> str:
-        return git(tree.path, "diff", "--binary", f"{tree.base_sha}..HEAD")
+        return git(
+            tree.path,
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-renames",
+            f"{tree.base_sha}..HEAD",
+        )
 
     def integrate_worker(self, tree: WorkerTree, message: str) -> str:
         current = self.integration_head()
         if current != tree.base_sha:
             raise GitError(
-                f"Integration HEAD moved from {tree.base_sha} to {current}; task must be rebased/replanned"
+                f"Integration HEAD moved from {tree.base_sha} to {current}; "
+                "task must be rebased/replanned"
+            )
+        dirty = git(
+            self.integration_path,
+            "status",
+            "--porcelain=v1",
+            "-z",
+            check=False,
+        )
+        if dirty:
+            raise GitError(
+                "Integration worktree is dirty; refusing to mix operator changes "
+                "with an automated task"
             )
         patch = self.worker_diff(tree)
         if not patch.strip():
             raise GitError("Worker produced no diff")
         patch_path = self.mission_dir / "patches" / f"{tree.task_id}.patch"
         patch_path.parent.mkdir(parents=True, exist_ok=True)
-        patch_path.write_text(patch, encoding="utf-8", errors="surrogateescape", newline="\n")
-        proc = subprocess.run(
-            ["git", "apply", "--index", "--3way", str(patch_path)],
-            cwd=str(self.integration_path), capture_output=True,
+        patch_path.write_text(
+            patch,
+            encoding="utf-8",
+            errors="surrogateescape",
+            newline="\n",
         )
-        if proc.returncode != 0:
-            raise GitError((_decode(proc.stderr) or _decode(proc.stdout)).strip())
-        self._ensure_identity(self.integration_path)
-        git(self.integration_path, "commit", "-m", message)
-        return self.integration_head()
+
+        try:
+            proc = subprocess.run(
+                ["git", "apply", "--index", "--3way", str(patch_path)],
+                cwd=str(self.integration_path),
+                capture_output=True,
+            )
+            if proc.returncode != 0:
+                raise GitError(
+                    (_decode(proc.stderr) or _decode(proc.stdout)).strip()
+                    or "git apply failed"
+                )
+            self._ensure_identity(self.integration_path)
+            git(self.integration_path, "commit", "-m", message)
+            return self.integration_head()
+        except Exception as exc:
+            rollback_errors: list[str] = []
+            try:
+                git(self.integration_path, "reset", "--hard", current)
+            except GitError as rollback_exc:
+                rollback_errors.append(f"reset failed: {rollback_exc}")
+            try:
+                git(self.integration_path, "clean", "-ffdx", check=False)
+            except GitError as rollback_exc:
+                rollback_errors.append(f"clean failed: {rollback_exc}")
+            if rollback_errors:
+                raise GitError(
+                    f"{exc}; integration rollback also failed: "
+                    + "; ".join(rollback_errors)
+                ) from exc
+            if isinstance(exc, GitError):
+                raise
+            raise GitError(str(exc)) from exc
 
     def remove_worker_worktree(self, tree: WorkerTree, keep_branch: bool = True) -> None:
         git(self.repo, "worktree", "remove", "--force", str(tree.path), check=False)

@@ -89,8 +89,17 @@ def limit_like(text: str) -> bool:
 
 def compact_text(text: str, limit: int = 6000) -> str:
     text = text.strip()
+    if limit <= 0:
+        return ""
     if len(text) <= limit:
         return text
-    head = max(500, limit // 3)
-    tail = limit - head - 80
-    return f"{text[:head]}\n\n… <compacted {len(text) - limit} characters> …\n\n{text[-tail:]}"
+    marker = "\n\n… <compacted> …\n\n"
+    if len(marker) >= limit:
+        return text[:limit]
+    content_budget = limit - len(marker)
+    head = max(1, content_budget // 3)
+    tail = content_budget - head
+    compacted = text[:head] + marker
+    if tail:
+        compacted += text[-tail:]
+    return compacted

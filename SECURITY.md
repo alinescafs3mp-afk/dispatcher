@@ -50,7 +50,7 @@ For an unknown or hostile repository:
 
 ## Dashboard exposure
 
-The dashboard has no user authentication. It binds to `127.0.0.1` by default. Browser-originated state-changing HTTP requests and WebSocket connections are restricted to the dashboard origin as defence in depth, but this does not replace authentication. Do not bind it to `0.0.0.0`, a LAN address or a public interface without authenticated TLS termination.
+The dashboard has no user authentication. It binds to `127.0.0.1` by default. Every HTTP and WebSocket request must also use an exact trusted Host name; loopback aliases are trusted automatically and additional reverse-proxy/LAN names must be listed in `server.allowed_hosts`. This prevents a matching attacker-controlled Origin/Host pair from using DNS rebinding to reach the local control API. Browser-originated state-changing requests still require the dashboard origin as defence in depth, but neither check replaces authentication. A wildcard bind is refused unless `server.allowed_hosts` is configured. Do not expose a LAN or public listener without authenticated TLS termination.
 
 ## Subscription credentials
 

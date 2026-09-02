@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,37 @@ LineCallback = Callable[[str, str], Awaitable[None]]
 # CLI JSONL events and model catalogs can legitimately exceed asyncio's 64 KiB
 # default StreamReader limit. Keep draining large records instead of deadlocking a child.
 SUBPROCESS_STREAM_LIMIT = 8 * 1024 * 1024
+PROCESS_CAPTURE_LIMIT = 2 * 1024 * 1024
+
+
+class _TailBuffer:
+    """Bound ProcessResult memory while callbacks continue receiving every line."""
+
+    def __init__(self, limit: int = PROCESS_CAPTURE_LIMIT) -> None:
+        self.limit = max(1, limit)
+        self._chunks: deque[str] = deque()
+        self._size = 0
+
+    def append(self, text: str) -> None:
+        chunk = ("\n" if self._chunks else "") + text
+        if len(chunk) >= self.limit:
+            self._chunks.clear()
+            self._chunks.append(chunk[-self.limit :])
+            self._size = self.limit
+            return
+        self._chunks.append(chunk)
+        self._size += len(chunk)
+        while self._size > self.limit and self._chunks:
+            excess = self._size - self.limit
+            first = self._chunks[0]
+            if len(first) <= excess:
+                self._size -= len(self._chunks.popleft())
+                continue
+            self._chunks[0] = first[excess:]
+            self._size -= excess
+
+    def render(self) -> str:
+        return "".join(self._chunks).lstrip("\n")
 
 
 @dataclass(slots=True)
@@ -53,10 +85,14 @@ class ProcessRunner:
         async with self._lock:
             self._active[key] = proc
 
-        stdout_parts: list[str] = []
-        stderr_parts: list[str] = []
+        stdout_parts = _TailBuffer()
+        stderr_parts = _TailBuffer()
 
-        async def pump(stream: asyncio.StreamReader | None, name: str, sink: list[str]) -> None:
+        async def pump(
+            stream: asyncio.StreamReader | None,
+            name: str,
+            sink: _TailBuffer,
+        ) -> None:
             if stream is None:
                 return
             while True:
@@ -101,8 +137,8 @@ class ProcessRunner:
 
         return ProcessResult(
             proc.returncode if proc.returncode is not None else -1,
-            "\n".join(stdout_parts),
-            "\n".join(stderr_parts),
+            stdout_parts.render(),
+            stderr_parts.render(),
             timed_out=timed_out,
             cancelled=cancelled,
             command=command,

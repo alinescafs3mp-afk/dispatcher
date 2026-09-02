@@ -50,8 +50,53 @@ class ReasoningRequest(BaseModel):
     effort: str = Field(min_length=1, max_length=32)
 
 
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_WILDCARD_BIND_HOSTS = {"0.0.0.0", "::"}
+
+
 def _default_port(scheme: str) -> int | None:
     return 443 if scheme in {"https", "wss"} else 80 if scheme in {"http", "ws"} else None
+
+
+def _hostname(value: str) -> str:
+    """Parse an exact Host-style value without accepting userinfo or paths."""
+    raw = value.strip()
+    if not raw or "://" in raw:
+        return ""
+    if raw.count(":") >= 2 and not raw.startswith("["):
+        raw = f"[{raw}]"
+    try:
+        parsed = urlsplit(f"http://{raw}")
+        if (
+            parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            return ""
+        return (parsed.hostname or "").rstrip(".").casefold()
+    except ValueError:
+        return ""
+
+
+def _trusted_hostnames(settings: Settings) -> set[str]:
+    trusted = {
+        hostname
+        for value in settings.server.allowed_hosts
+        if (hostname := _hostname(str(value)))
+    }
+    configured = _hostname(settings.server.host)
+    if configured in _LOOPBACK_HOSTS or configured in _WILDCARD_BIND_HOSTS:
+        trusted.update(_LOOPBACK_HOSTS)
+    elif configured:
+        trusted.add(configured)
+    return trusted
+
+
+def _host_allowed(host: str, trusted_hosts: set[str]) -> bool:
+    hostname = _hostname(host)
+    return bool(hostname and hostname in trusted_hosts)
 
 
 def _origin_allowed(origin: str, host: str, scheme: str = "http") -> bool:
@@ -63,14 +108,17 @@ def _origin_allowed(origin: str, host: str, scheme: str = "http") -> bool:
     try:
         parsed_origin = urlsplit(origin)
         host_scheme = "https" if scheme in {"https", "wss"} else "http"
-        parsed_host = urlsplit(f"{host_scheme}://{host}")
         origin_port = parsed_origin.port or _default_port(parsed_origin.scheme)
-        host_port = parsed_host.port or _default_port(host_scheme)
+        host_port = urlsplit(f"{host_scheme}://{host}").port or _default_port(host_scheme)
     except ValueError:
         return False
+    origin_hostname = (parsed_origin.hostname or "").rstrip(".").casefold()
     return (
         parsed_origin.scheme in {"http", "https"}
-        and parsed_origin.hostname == parsed_host.hostname
+        and parsed_origin.username is None
+        and parsed_origin.password is None
+        and bool(origin_hostname)
+        and origin_hostname == _hostname(host)
         and origin_port == host_port
     )
 
@@ -105,6 +153,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     resolved = settings or load_settings()
     static_dir = Path(__file__).with_name("static")
     background_tasks: set[asyncio.Task[Any]] = set()
+    trusted_hosts = _trusted_hostnames(resolved)
 
     def spawn(coroutine: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         task = asyncio.create_task(coroutine)
@@ -139,10 +188,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.mount("/assets", StaticFiles(directory=static_dir), name="assets")
 
     @app.middleware("http")
-    async def reject_cross_origin_controls(request: Request, call_next):
+    async def reject_untrusted_or_cross_origin_controls(request: Request, call_next):
+        request_host = request.headers.get("host", "")
+        if not _host_allowed(request_host, trusted_hosts):
+            return JSONResponse(
+                status_code=421,
+                content={"detail": "Untrusted Host header"},
+            )
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not _origin_allowed(
             request.headers.get("origin", ""),
-            request.headers.get("host", ""),
+            request_host,
             request.url.scheme,
         ):
             return JSONResponse(
@@ -310,9 +365,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.websocket("/ws")
     async def websocket(websocket: WebSocket) -> None:
+        websocket_host = websocket.headers.get("host", "")
+        if not _host_allowed(websocket_host, trusted_hosts):
+            await websocket.close(code=1008, reason="untrusted websocket host")
+            return
         if not _origin_allowed(
             websocket.headers.get("origin", ""),
-            websocket.headers.get("host", ""),
+            websocket_host,
             websocket.url.scheme,
         ):
             await websocket.close(code=1008, reason="cross-origin websocket rejected")

@@ -17,6 +17,7 @@ from nightshift.orchestrator import NightshiftOrchestrator, OrchestratorError
 def make_settings(repo: Path, tmp_path: Path):
     settings = default_settings(str(repo))
     settings.orchestrator.runtime_dir = str(tmp_path / "runtime")
+    settings.server.allowed_hosts = ["testserver"]
     for agent in settings.agents.values():
         agent.enabled = False
         agent.binary_candidates = [str(tmp_path / "missing")]
