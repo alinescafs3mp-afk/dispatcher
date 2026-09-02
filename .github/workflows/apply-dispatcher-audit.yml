@@ -39,12 +39,12 @@ jobs:
             exit 0
           fi
           echo 'active=true' >> "$GITHUB_OUTPUT"
-          test "$(git rev-parse HEAD^)" = '2d2cd39d052dd807833d82d7bb13f324db1ce4ae'
-          echo '40783264d5b0e8f662115b4b48d425063b752b6f2fc9f7a400fdfb93fcf49908  .dispatcher-audit/payload.gz' | sha256sum --check --strict
+          test "$(git rev-parse HEAD^)" = '9b1983ac70edf23acf036cfd283d5078636d2fbf'
+          echo 'd13c254b191ec92e3024815c7e68873bd4f24679b1a03eff875755d88a6ece6f  .dispatcher-audit/payload.gz' | sha256sum --check --strict
           gzip -t .dispatcher-audit/payload.gz
           mkdir -p scripts
           gzip -dc .dispatcher-audit/payload.gz > scripts/.apply_dispatcher_audit.py
-          echo 'b7de79334518b2047c5b5f03b901ca8106d59b7b1fa01b77e7ba753ccf190ffe  scripts/.apply_dispatcher_audit.py' | sha256sum --check --strict
+          echo '4bf3a87b95ffcace9fe21519e3314e71f9c4dbcd498a3b3c72cc71ff6037df01  scripts/.apply_dispatcher_audit.py' | sha256sum --check --strict
           python scripts/.apply_dispatcher_audit.py
           rm -rf .dispatcher-audit scripts/.apply_dispatcher_audit.py
           git diff --check
