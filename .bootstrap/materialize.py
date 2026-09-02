@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Materialize the verified source archive staged in .bootstrap/.
-
-This is a one-shot transport helper for the initial repository population.
-It refuses path traversal, special files, malformed base64, and checksum drift.
-"""
+"""Materialize the checksum-verified source archive staged in .bootstrap/."""
 from __future__ import annotations
 
 import base64
 import hashlib
-import io
+import os
 import shutil
 import tarfile
 from pathlib import Path, PurePosixPath
@@ -18,24 +14,20 @@ ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = ROOT / ".bootstrap"
 
 
-def _safe_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
-    members = archive.getmembers()
-    for member in members:
-        path = PurePosixPath(member.name)
-        if path.is_absolute() or ".." in path.parts or not path.parts:
-            raise RuntimeError(f"unsafe archive path: {member.name!r}")
-        if member.issym() or member.islnk() or member.isdev() or member.isfifo():
-            raise RuntimeError(f"unsupported archive entry: {member.name!r}")
-        destination = (ROOT / Path(*path.parts)).resolve()
-        if destination != ROOT and ROOT not in destination.parents:
-            raise RuntimeError(f"archive path escapes repository: {member.name!r}")
-    return members
+def destination_for(name: str) -> Path:
+    logical = PurePosixPath(name)
+    if logical.is_absolute() or not logical.parts or ".." in logical.parts:
+        raise RuntimeError(f"unsafe archive path: {name!r}")
+    destination = (ROOT / Path(*logical.parts)).resolve()
+    if destination != ROOT and ROOT not in destination.parents:
+        raise RuntimeError(f"archive path escapes repository: {name!r}")
+    return destination
 
 
 def main() -> None:
     chunks = sorted(BOOTSTRAP.glob("chunk-*.b64"))
     if not chunks:
-        print("No bootstrap chunks found; repository is already materialized.")
+        print("Bootstrap chunks are absent; source is already materialized.")
         return
 
     encoded = "".join(path.read_text(encoding="ascii").strip() for path in chunks)
@@ -44,12 +36,30 @@ def main() -> None:
     if actual != EXPECTED_SHA256:
         raise RuntimeError(f"archive checksum mismatch: {actual}")
 
-    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
-        members = _safe_members(archive)
-        archive.extractall(ROOT, members=members, filter="data")
+    archive_path = BOOTSTRAP / "source.tar.gz"
+    archive_path.write_bytes(payload)
+    extracted = 0
+    with tarfile.open(archive_path, mode="r:gz") as archive:
+        for member in archive.getmembers():
+            destination = destination_for(member.name)
+            if member.isdir():
+                destination.mkdir(parents=True, exist_ok=True)
+                continue
+            if not member.isfile():
+                raise RuntimeError(f"unsupported archive entry: {member.name!r}")
+            source = archive.extractfile(member)
+            if source is None:
+                raise RuntimeError(f"cannot read archive entry: {member.name!r}")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_name(destination.name + ".dispatcher-tmp")
+            with temporary.open("wb") as handle:
+                shutil.copyfileobj(source, handle)
+            os.chmod(temporary, member.mode & 0o777)
+            temporary.replace(destination)
+            extracted += 1
 
     shutil.rmtree(BOOTSTRAP)
-    print(f"Materialized {len(members)} archive entries; sha256={actual}")
+    print(f"Materialized {extracted} files; sha256={actual}")
 
 
 if __name__ == "__main__":
