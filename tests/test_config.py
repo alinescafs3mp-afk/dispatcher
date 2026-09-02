@@ -28,6 +28,9 @@ def test_render_example_round_trip(tmp_path: Path) -> None:
     assert settings.project.repo == str(tmp_path / "friday")
     assert settings.agent("grok").scrub_sensitive_env is True
     assert settings.agent("spark").inherit_previous_session is True
+    assert settings.profiles.default == "reserve"
+    assert settings.profiles.combat_grok_enabled is False
+    assert settings.profiles.combat_sol_model == ""
 
 
 def test_sanitized_child_env_removes_credentials(monkeypatch) -> None:

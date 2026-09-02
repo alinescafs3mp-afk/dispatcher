@@ -1,4 +1,4 @@
-# Sol Link Nightshift configuration
+# Sol Link Dispatcher configuration
 
 [server]
 host = "127.0.0.1"
@@ -12,6 +12,17 @@ validation_commands = []
 protected_paths = [".git/**", ".env", ".env.*", "**/*.pem", "**/*.key", "**/*.token"]
 high_risk_paths = ["**/migrations/**", "**/security/**", "**/auth/**", "**/sandbox/**", "**/engineer_mode/**", "**/permissions/**"]
 session_search_roots = ["~/.codex/sessions", "~/.config/codex-multi/profiles/*/sessions"]
+
+[profiles]
+default = "reserve"
+combat_grok_enabled = false
+# Empty model names let the authenticated codex wrappers select their normal model.
+combat_sol_model = ""
+combat_sol_effort = "max"
+combat_goodman_model = ""
+combat_goodman_effort = "max"
+combat_grok_model = "grok-4.6"
+combat_grok_effort = "xhigh"
 
 [orchestrator]
 runtime_dir = "~/.local/state/sol-link-nightshift"
@@ -32,6 +43,7 @@ poll_seconds = 1.0
 [agents.grok]
 id = "grok-architect"
 role = "temporary chief architect and reviewer"
+adapter = "grok"
 binary_candidates = ["grok-build", "grok"]
 model = "grok-4.6"
 effort = "xhigh"
@@ -49,6 +61,7 @@ unsafe_full_access = false
 [agents.spark]
 id = "codex-spark"
 role = "micro-implementation worker"
+adapter = "codex"
 binary_candidates = ["codex"]
 model = "gpt-5.3-codex-spark"
 effort = "high"
@@ -65,8 +78,8 @@ unsafe_full_access = false
 [agents.luna]
 id = "codex-luna"
 role = "implementation owner and debugger"
+adapter = "codex"
 binary_candidates = ["codex-solgoodman"]
-# Explicit by default. Set to an empty string only when your wrapper selects Luna itself.
 model = "gpt-5.6-luna"
 effort = "max"
 effort_options = ["none", "low", "medium", "high", "xhigh", "max"]

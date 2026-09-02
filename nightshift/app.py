@@ -4,7 +4,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import __version__
 from .config import Settings, load_settings
 from .forensics import ForensicsScanner
 from .orchestrator import NightshiftOrchestrator, OrchestratorError
@@ -24,6 +25,13 @@ class MissionStartRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     text: str = Field(min_length=1, max_length=30_000)
+    recipient: str = Field(default="architect", min_length=1, max_length=128)
+    delivery: Literal["auto", "chat", "nudge"] = "auto"
+
+
+class ProfileRequest(BaseModel):
+    profile: Literal["reserve", "combat"]
+    combat_grok_enabled: bool | None = None
 
 
 class HumanDecisionRequest(BaseModel):
@@ -73,6 +81,10 @@ async def _safe_warmup(orchestrator: NightshiftOrchestrator) -> None:
         await orchestrator.refresh_quotas()
     except Exception as exc:
         await orchestrator._emit("system.warmup_error", {"phase": "quotas", "error": str(exc)})
+    await orchestrator._emit(
+        "system.warmup_complete",
+        {"profile": orchestrator.profile_id},
+    )
 
 
 async def _quota_loop(orchestrator: NightshiftOrchestrator) -> None:
@@ -89,27 +101,35 @@ async def _quota_loop(orchestrator: NightshiftOrchestrator) -> None:
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved = settings or load_settings()
     static_dir = Path(__file__).with_name("static")
+    background_tasks: set[asyncio.Task[Any]] = set()
+
+    def spawn(coroutine) -> asyncio.Task[Any]:
+        task = asyncio.create_task(coroutine)
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+        return task
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         orchestrator = NightshiftOrchestrator(resolved)
         app.state.orchestrator = orchestrator
-        warmup = asyncio.create_task(_safe_warmup(orchestrator))
-        quota_loop = asyncio.create_task(_quota_loop(orchestrator))
+        app.state.background_tasks = background_tasks
+        spawn(_safe_warmup(orchestrator))
+        spawn(_quota_loop(orchestrator))
         try:
             yield
         finally:
-            warmup.cancel()
-            quota_loop.cancel()
-            with suppress(asyncio.CancelledError):
-                await warmup
-            with suppress(asyncio.CancelledError):
-                await quota_loop
+            tasks = list(background_tasks)
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                with suppress(asyncio.CancelledError):
+                    await asyncio.gather(*tasks, return_exceptions=True)
             await orchestrator.close()
 
     app = FastAPI(
-        title="Sol Link Nightshift",
-        version="0.2.0",
+        title="Sol Link Dispatcher",
+        version=__version__,
         lifespan=lifespan,
         docs_url="/api/docs",
         redoc_url=None,
@@ -138,11 +158,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/healthz")
     async def healthz() -> dict[str, Any]:
-        return {"ok": True, "service": "sol-link-nightshift"}
+        return {
+            "ok": True,
+            "service": "sol-link-dispatcher",
+            "profile": orch().profile_id,
+        }
 
     @app.get("/api/state")
     async def state() -> dict[str, Any]:
         return orch().snapshot()
+
+    @app.put("/api/profile")
+    async def set_profile(request: ProfileRequest) -> dict[str, Any]:
+        before = (orch().profile_id, orch().combat_grok_enabled)
+        try:
+            result = await orch().set_profile(
+                request.profile,
+                combat_grok_enabled=request.combat_grok_enabled,
+            )
+        except OrchestratorError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        after = (orch().profile_id, orch().combat_grok_enabled)
+        if after != before:
+            spawn(_safe_warmup(orch()))
+        return result
 
     @app.post("/api/doctor")
     async def doctor() -> dict[str, Any]:
@@ -161,18 +200,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/recovery/scan")
     async def recovery_scan(request: ScanRequest) -> dict[str, Any]:
-        runtime = resolved.orchestrator.runtime_path
+        active_settings = orch().settings
+        runtime = active_settings.orchestrator.runtime_path
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
         scan_dir = runtime / "manual-scans" / stamp
         scan_dir.mkdir(parents=True, exist_ok=False)
         if request.include_quotas:
             await orch().refresh_quotas()
-        scanner = ForensicsScanner(resolved, scan_dir, orch().codex_homes)
+        scanner = ForensicsScanner(active_settings, scan_dir, orch().codex_homes)
         report = await asyncio.to_thread(scanner.scan)
-        await orch()._emit("recovery.manual_scan_ready", {
-            "dossier": report["markdown_path"],
-            "json": report["json_path"],
-        })
+        await orch()._emit(
+            "recovery.manual_scan_ready",
+            {
+                "dossier": report["markdown_path"],
+                "json": report["json_path"],
+            },
+        )
         return report
 
     @app.post("/api/missions/start")
@@ -181,7 +224,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             mission_id = await orch().start_mission(request.goal.strip())
         except OrchestratorError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"mission_id": mission_id}
+        return {"mission_id": mission_id, "profile": orch().profile_id}
 
     @app.post("/api/missions/{mission_id}/resume")
     async def resume_mission(mission_id: str) -> dict[str, str]:
@@ -189,7 +232,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await orch().resume_interrupted(mission_id)
         except OrchestratorError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"mission_id": mission_id, "status": "resuming"}
+        return {
+            "mission_id": mission_id,
+            "status": "resuming",
+            "profile": orch().profile_id,
+        }
 
     @app.post("/api/mission/pause")
     async def pause_mission() -> dict[str, bool]:
@@ -224,19 +271,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/chat")
-    async def chat(request: ChatRequest) -> dict[str, str]:
+    async def chat(request: ChatRequest) -> dict[str, Any]:
         try:
-            answer = await orch().chat(request.text)
+            return await orch().chat(
+                request.text,
+                recipient=request.recipient,
+                delivery=request.delivery,
+            )
         except OrchestratorError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return {"answer": answer}
 
     @app.get("/api/directive", include_in_schema=False)
     async def directive() -> FileResponse:
+        profile_id = orch().profile_id
+        path = directive_path(profile_id)
         return FileResponse(
-            directive_path(),
+            path,
             media_type="text/markdown; charset=utf-8",
-            filename="EMERGENCY_TAKEOVER_DIRECTIVE.md",
+            filename=path.name,
+        )
+
+    @app.get("/api/directive/{profile_id}", include_in_schema=False)
+    async def profile_directive(profile_id: str) -> FileResponse:
+        try:
+            path = directive_path(profile_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(
+            path,
+            media_type="text/markdown; charset=utf-8",
+            filename=path.name,
         )
 
     @app.websocket("/ws")
@@ -251,11 +315,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await websocket.accept()
         queue = await orch().hub.subscribe(replay=False)
         try:
-            await websocket.send_json({"type": "state.snapshot", "payload": orch().snapshot()})
+            await websocket.send_json(
+                {"type": "state.snapshot", "payload": orch().snapshot()}
+            )
             while True:
-                event = await queue.get()
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                except TimeoutError:
+                    await websocket.send_json(
+                        {
+                            "type": "system.heartbeat",
+                            "payload": {
+                                "sent_at": datetime.now(UTC).isoformat(),
+                                "event_seq": orch().db.latest_event_seq(),
+                            },
+                        }
+                    )
+                    continue
                 await websocket.send_json(event)
-        except (WebSocketDisconnect, RuntimeError):
+        except (WebSocketDisconnect, RuntimeError, OSError):
             pass
         finally:
             await orch().hub.unsubscribe(queue)

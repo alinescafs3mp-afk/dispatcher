@@ -475,4 +475,4 @@ class MissionWorkspace:
         if not git(path, "config", "user.email", check=False).strip():
             git(path, "config", "user.email", "nightshift@local")
         if not git(path, "config", "user.name", check=False).strip():
-            git(path, "config", "user.name", "Sol Link Nightshift")
+            git(path, "config", "user.name", "Sol Link Dispatcher")

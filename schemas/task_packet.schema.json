@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Sol Link Nightshift Task Packet",
+  "title": "Sol Link Dispatcher Task Packet",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "title", "goal", "worker", "allowed_paths", "forbidden_paths", "acceptance_criteria", "validation_commands", "risk"],

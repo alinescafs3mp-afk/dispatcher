@@ -23,9 +23,9 @@ DEFAULT_BACKLOG_GLOBS = [
     ".sol-link/**/*.md",
 ]
 
-# Keep the official CLI's persisted subscription login authoritative.  These
-# environment variables can silently switch a CLI from a consumer subscription
-# to metered API billing, which is the opposite of what Nightshift is for.
+# Keep the official CLI's persisted subscription login authoritative. These
+# variables can silently switch a CLI from a consumer subscription to metered
+# API billing, which is the opposite of what this dispatcher is for.
 CODEX_API_ENV_VARS = [
     "OPENAI_API_KEY",
     "CODEX_API_KEY",
@@ -45,16 +45,12 @@ _SENSITIVE_ENV_NAME = re.compile(
 )
 
 
-def sanitized_child_env(*, strip: list[str] | None = None,
-                        extra: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Return a usable process environment without ambient credential variables.
-
-    HOME, PATH, CODEX_HOME, GROK_HOME, XDG paths, locale, and ordinary build
-    variables survive.  Credential-shaped variables are removed, then explicit
-    per-agent removals are applied.  This cannot hide secrets stored in arbitrary
-    files, but it prevents the most common accidental leakage into model-authored
-    shell commands and project validation.
-    """
+def sanitized_child_env(
+    *,
+    strip: list[str] | None = None,
+    extra: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Return a usable process environment without ambient credential variables."""
     env: dict[str, str] = {}
     for key, value in os.environ.items():
         if _SENSITIVE_ENV_NAME.search(key):
@@ -72,6 +68,11 @@ class AgentConfig:
     id: str
     role: str
     binary_candidates: list[str]
+    adapter: str = "codex"
+    display_name: str = ""
+    lane: str = ""
+    physical_key: str = ""
+    optional: bool = False
     model: str = ""
     effort: str = ""
     effort_options: list[str] = field(default_factory=list)
@@ -96,7 +97,7 @@ class AgentConfig:
         return ""
 
     def subprocess_env(self, extra: Mapping[str, str] | None = None) -> dict[str, str]:
-        """Return a full child environment that keeps subscription auth authoritative."""
+        """Return a complete child environment with subscription auth authoritative."""
         if self.scrub_sensitive_env:
             return sanitized_child_env(strip=self.strip_env, extra=extra)
         env = os.environ.copy()
@@ -138,6 +139,20 @@ class ProjectConfig:
 
 
 @dataclass(slots=True)
+class ProfilesConfig:
+    default: str = "reserve"
+    combat_grok_enabled: bool = False
+    # Empty combat Codex model names intentionally delegate model selection to
+    # the corresponding authenticated wrapper/profile.
+    combat_sol_model: str = ""
+    combat_sol_effort: str = "max"
+    combat_goodman_model: str = ""
+    combat_goodman_effort: str = "max"
+    combat_grok_model: str = "grok-4.6"
+    combat_grok_effort: str = "xhigh"
+
+
+@dataclass(slots=True)
 class OrchestratorConfig:
     runtime_dir: str = "~/.local/state/sol-link-nightshift"
     max_tasks: int = 100
@@ -163,6 +178,7 @@ class OrchestratorConfig:
 class Settings:
     server: ServerConfig
     project: ProjectConfig
+    profiles: ProfilesConfig
     orchestrator: OrchestratorConfig
     agents: dict[str, AgentConfig]
     config_path: Path | None = None
@@ -179,11 +195,18 @@ class Settings:
                 "protected_paths": list(self.project.protected_paths),
                 "high_risk_paths": list(self.project.high_risk_paths),
             },
+            "profiles": asdict(self.profiles),
             "orchestrator": asdict(self.orchestrator),
             "agents": {
                 key: {
                     "id": value.id,
                     "role": value.role,
+                    "display_name": value.display_name,
+                    "lane": value.lane,
+                    "adapter": value.adapter,
+                    "physical_key": value.physical_key,
+                    "optional": value.optional,
+                    "binary_label": value.binary_candidates[0] if value.binary_candidates else "",
                     "model": value.model,
                     "effort": value.effort,
                     "effort_options": list(value.effort_options),
@@ -202,11 +225,16 @@ def default_settings(repo: str = "") -> Settings:
     return Settings(
         server=ServerConfig(),
         project=ProjectConfig(repo=repo),
+        profiles=ProfilesConfig(),
         orchestrator=OrchestratorConfig(),
         agents={
             "grok": AgentConfig(
                 id="grok-architect",
                 role="temporary chief architect and reviewer",
+                display_name="Grok 4.6",
+                lane="lead architect",
+                physical_key="grok",
+                adapter="grok",
                 binary_candidates=["grok-build", "grok"],
                 model="grok-4.6",
                 effort="xhigh",
@@ -217,6 +245,10 @@ def default_settings(repo: str = "") -> Settings:
             "spark": AgentConfig(
                 id="codex-spark",
                 role="micro-implementation worker",
+                display_name="Codex Spark",
+                lane="micro worker",
+                physical_key="spark",
+                adapter="codex",
                 binary_candidates=["codex"],
                 model="gpt-5.3-codex-spark",
                 effort="high",
@@ -227,6 +259,10 @@ def default_settings(repo: str = "") -> Settings:
             "luna": AgentConfig(
                 id="codex-luna",
                 role="implementation owner and debugger",
+                display_name="Codex Luna",
+                lane="primary worker",
+                physical_key="luna",
+                adapter="codex",
                 binary_candidates=["codex-solgoodman"],
                 model="gpt-5.6-luna",
                 effort="max",
@@ -253,6 +289,7 @@ def load_settings(path: str | Path | None = None, repo_override: str = "") -> Se
             raw = tomllib.load(handle)
         _merge_dataclass(settings.server, raw.get("server", {}))
         _merge_dataclass(settings.project, raw.get("project", {}))
+        _merge_dataclass(settings.profiles, raw.get("profiles", {}))
         _merge_dataclass(settings.orchestrator, raw.get("orchestrator", {}))
         for key, data in raw.get("agents", {}).items():
             if key in settings.agents and isinstance(data, dict):
@@ -264,4 +301,4 @@ def load_settings(path: str | Path | None = None, repo_override: str = "") -> Se
 
 
 def render_example(repo: str = "/path/to/friday") -> str:
-    return f'''# Sol Link Nightshift configuration\n\n[server]\nhost = "127.0.0.1"\nport = 8787\nopen_browser = true\n\n[project]\nrepo = "{repo}"\nbacklog_globs = ["BACKLOG*.md", "**/BACKLOG*.md", "TODO*.md", "**/TODO*.md", "ROADMAP*.md", "**/ROADMAP*.md", "HANDOFF*.md", "**/HANDOFF*.md", "outer_sol/**/*.md", "handoffs/**/*.md", ".sol-link/**/*.md"]\nvalidation_commands = []\nprotected_paths = [".git/**", ".env", ".env.*", "**/*.pem", "**/*.key", "**/*.token"]\nhigh_risk_paths = ["**/migrations/**", "**/security/**", "**/auth/**", "**/sandbox/**", "**/engineer_mode/**", "**/permissions/**"]\nsession_search_roots = ["~/.codex/sessions", "~/.config/codex-multi/profiles/*/sessions"]\n\n[orchestrator]\nruntime_dir = "~/.local/state/sol-link-nightshift"\nmax_tasks = 100\nmax_revisions = 2\narchitect_session_max_turns = 16\nrecover_predecessor_sessions = true\ncontinue_until_backlog_done = true\nauto_accept_low_risk = true\nauto_accept_medium_risk = false\nrequire_human_for_high_risk = true\ncopy_untracked_max_file_mb = 25\ncopy_untracked_total_mb = 250\nlog_tail_lines = 1000\ncommand_timeout_seconds = 3600\npoll_seconds = 1.0\n\n[agents.grok]\nid = "grok-architect"\nrole = "temporary chief architect and reviewer"\nbinary_candidates = ["grok-build", "grok"]\nmodel = "grok-4.6"\neffort = "xhigh"\neffort_options = ["low", "medium", "high", "xhigh"]\nstrip_env = ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nmax_turns = 80\nextra_args = []\nquota_command = []\ninherit_previous_session = false\nenabled = true\nunsafe_full_access = false\n\n[agents.spark]\nid = "codex-spark"\nrole = "micro-implementation worker"\nbinary_candidates = ["codex"]\nmodel = "gpt-5.3-codex-spark"\neffort = "high"\neffort_options = ["low", "medium", "high", "xhigh"]\nstrip_env = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AZURE_OPENAI_API_KEY", "OPENAI_BASE_URL"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nextra_args = []\nquota_command = []\ninherit_previous_session = true\nenabled = true\nunsafe_full_access = false\n\n[agents.luna]\nid = "codex-luna"\nrole = "implementation owner and debugger"\nbinary_candidates = ["codex-solgoodman"]\n# Explicit by default. Set to an empty string only when your wrapper selects Luna itself.\nmodel = "gpt-5.6-luna"\neffort = "max"\neffort_options = ["none", "low", "medium", "high", "xhigh", "max"]\nstrip_env = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AZURE_OPENAI_API_KEY", "OPENAI_BASE_URL"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nextra_args = []\nquota_command = []\ninherit_previous_session = true\nenabled = true\nunsafe_full_access = false\n'''
+    return f'''# Sol Link Dispatcher configuration\n\n[server]\nhost = "127.0.0.1"\nport = 8787\nopen_browser = true\n\n[project]\nrepo = "{repo}"\nbacklog_globs = ["BACKLOG*.md", "**/BACKLOG*.md", "TODO*.md", "**/TODO*.md", "ROADMAP*.md", "**/ROADMAP*.md", "HANDOFF*.md", "**/HANDOFF*.md", "outer_sol/**/*.md", "handoffs/**/*.md", ".sol-link/**/*.md"]\nvalidation_commands = []\nprotected_paths = [".git/**", ".env", ".env.*", "**/*.pem", "**/*.key", "**/*.token"]\nhigh_risk_paths = ["**/migrations/**", "**/security/**", "**/auth/**", "**/sandbox/**", "**/engineer_mode/**", "**/permissions/**"]\nsession_search_roots = ["~/.codex/sessions", "~/.config/codex-multi/profiles/*/sessions"]\n\n[profiles]\ndefault = "reserve"\ncombat_grok_enabled = false\n# Empty model names let the authenticated codex wrappers select their normal model.\ncombat_sol_model = ""\ncombat_sol_effort = "max"\ncombat_goodman_model = ""\ncombat_goodman_effort = "max"\ncombat_grok_model = "grok-4.6"\ncombat_grok_effort = "xhigh"\n\n[orchestrator]\nruntime_dir = "~/.local/state/sol-link-nightshift"\nmax_tasks = 100\nmax_revisions = 2\narchitect_session_max_turns = 16\nrecover_predecessor_sessions = true\ncontinue_until_backlog_done = true\nauto_accept_low_risk = true\nauto_accept_medium_risk = false\nrequire_human_for_high_risk = true\ncopy_untracked_max_file_mb = 25\ncopy_untracked_total_mb = 250\nlog_tail_lines = 1000\ncommand_timeout_seconds = 3600\npoll_seconds = 1.0\n\n[agents.grok]\nid = "grok-architect"\nrole = "temporary chief architect and reviewer"\nadapter = "grok"\nbinary_candidates = ["grok-build", "grok"]\nmodel = "grok-4.6"\neffort = "xhigh"\neffort_options = ["low", "medium", "high", "xhigh"]\nstrip_env = ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nmax_turns = 80\nextra_args = []\nquota_command = []\ninherit_previous_session = false\nenabled = true\nunsafe_full_access = false\n\n[agents.spark]\nid = "codex-spark"\nrole = "micro-implementation worker"\nadapter = "codex"\nbinary_candidates = ["codex"]\nmodel = "gpt-5.3-codex-spark"\neffort = "high"\neffort_options = ["low", "medium", "high", "xhigh"]\nstrip_env = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AZURE_OPENAI_API_KEY", "OPENAI_BASE_URL"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nextra_args = []\nquota_command = []\ninherit_previous_session = true\nenabled = true\nunsafe_full_access = false\n\n[agents.luna]\nid = "codex-luna"\nrole = "implementation owner and debugger"\nadapter = "codex"\nbinary_candidates = ["codex-solgoodman"]\nmodel = "gpt-5.6-luna"\neffort = "max"\neffort_options = ["none", "low", "medium", "high", "xhigh", "max"]\nstrip_env = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AZURE_OPENAI_API_KEY", "OPENAI_BASE_URL"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nextra_args = []\nquota_command = []\ninherit_previous_session = true\nenabled = true\nunsafe_full_access = false\n'''

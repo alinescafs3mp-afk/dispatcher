@@ -3,21 +3,35 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sol Link Nightshift</title>
+  <title>Sol Link Dispatcher</title>
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
   <div class="noise"></div>
   <header class="topbar">
     <div>
-      <div class="eyebrow">SOL LINK / EMERGENCY CONTINUITY</div>
-      <h1>Nightshift <span>control room</span></h1>
+      <div id="profileEyebrow" class="eyebrow">SOL LINK / EMERGENCY CONTINUITY</div>
+      <h1>Dispatcher <span id="profileWord">reserve</span></h1>
+      <p id="profileDescription" class="top-description">Loading operating profile…</p>
     </div>
-    <div class="header-actions">
-      <span id="socketBadge" class="badge muted">linking…</span>
-      <button id="doctorBtn" class="ghost">Doctor</button>
-      <button id="quotaBtn" class="ghost">Refresh limits</button>
-      <a class="ghost button-link" href="/api/directive">Directive ↧</a>
+    <div class="header-stack">
+      <div class="profile-controls glass-soft" aria-label="Operating profile">
+        <div id="profileSwitch" class="profile-switch" role="group" aria-label="Бой или резерв">
+          <button type="button" data-profile="combat">Бой</button>
+          <button type="button" data-profile="reserve">Резерв</button>
+        </div>
+        <label id="combatGrokWrap" class="helper-toggle" hidden>
+          <input id="combatGrokToggle" type="checkbox">
+          <span>подключить Grok</span>
+        </label>
+      </div>
+      <div class="header-actions">
+        <span id="socketBadge" class="badge muted">linking…</span>
+        <span id="profileBadge" class="badge muted">profile…</span>
+        <button id="doctorBtn" class="ghost" type="button">Doctor</button>
+        <button id="quotaBtn" class="ghost" type="button">Refresh limits</button>
+        <a id="directiveLink" class="ghost button-link" href="/api/directive">Directive ↧</a>
+      </div>
     </div>
   </header>
 
@@ -25,58 +39,73 @@
     <section class="mission-panel glass">
       <div class="mission-heading">
         <div>
-          <div class="eyebrow">MISSION</div>
-          <h2 id="missionTitle">No active takeover</h2>
-          <p id="missionMeta" class="muted-text">Point Nightshift at Friday and start from the exact interrupted state.</p>
+          <div id="missionEyebrow" class="eyebrow">MISSION</div>
+          <h2 id="missionTitle">No active mission</h2>
+          <p id="missionMeta" class="muted-text">Loading mission state…</p>
         </div>
         <div class="mission-controls">
-          <button id="pauseBtn" class="ghost" disabled>Pause</button>
-          <button id="resumeBtn" class="ghost" disabled>Continue</button>
-          <button id="stopBtn" class="danger" disabled>Stop</button>
+          <button id="pauseBtn" class="ghost" type="button" disabled>Pause</button>
+          <button id="resumeBtn" class="ghost" type="button" disabled>Continue</button>
+          <button id="stopBtn" class="danger" type="button" disabled>Stop</button>
         </div>
       </div>
       <div class="mission-launch">
-        <textarea id="goalInput" rows="2" placeholder="Goal, for example: Recover Sol/SolGoodman work and finish the reconciled Friday backlog to completion."></textarea>
-        <button id="startBtn" class="primary">Begin takeover</button>
-        <button id="resumeInterruptedBtn" class="ghost" hidden>Resume preserved mission</button>
+        <textarea id="goalInput" rows="2" placeholder="Mission goal"></textarea>
+        <button id="startBtn" class="primary" type="button">Begin mission</button>
+        <button id="resumeInterruptedBtn" class="ghost" type="button" hidden>Resume preserved mission</button>
       </div>
       <div id="missionPaths" class="path-strip"></div>
     </section>
 
-    <section class="agents-grid">
+    <section class="agents-grid" aria-label="Active participants">
       <article class="agent-card glass" data-key="grok">
         <div class="agent-head">
-          <div><div class="eyebrow">CHIEF ARCHITECT</div><h3>Grok 4.6 <span data-role="effort-badge">xhigh</span></h3></div>
+          <div>
+            <div class="eyebrow" data-role="lane">LEAD ARCHITECT</div>
+            <h3><strong data-role="name">Architect</strong> <span data-role="effort-badge"></span></h3>
+            <div class="agent-role" data-role="role"></div>
+          </div>
           <span class="state-dot"><i></i><b data-role="state">offline</b></span>
         </div>
-        <div class="agent-facts"><span data-role="model">grok-4.6</span><span data-role="usage">0 tokens</span></div>
-        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Grok reasoning"></select><small>next turn</small></label>
+        <div class="agent-facts"><span data-role="model">model</span><span data-role="usage">0 tokens</span></div>
+        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span data-role="optional" class="badge muted" hidden>optional</span></div>
+        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Architect reasoning"></select><small>next turn</small></label>
         <div class="quota-zone" data-role="quotas"></div>
-        <div class="console-title"><span>grok-build</span><button data-role="clear-log" class="tiny">clear view</button></div>
+        <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">clear view</button></div>
         <pre class="console" data-role="console"></pre>
       </article>
 
       <article class="agent-card glass" data-key="luna">
         <div class="agent-head">
-          <div><div class="eyebrow">IMPLEMENTATION OWNER</div><h3>Codex <span>Luna</span></h3></div>
+          <div>
+            <div class="eyebrow" data-role="lane">IMPLEMENTATION OWNER</div>
+            <h3><strong data-role="name">Primary worker</strong> <span data-role="effort-badge"></span></h3>
+            <div class="agent-role" data-role="role"></div>
+          </div>
           <span class="state-dot"><i></i><b data-role="state">offline</b></span>
         </div>
-        <div class="agent-facts"><span data-role="model">gpt-5.6-luna</span><span data-role="usage">0 tokens</span></div>
-        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Luna reasoning"></select><small>next turn</small></label>
+        <div class="agent-facts"><span data-role="model">model</span><span data-role="usage">0 tokens</span></div>
+        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span data-role="optional" class="badge muted" hidden>optional</span></div>
+        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Primary worker reasoning"></select><small>next turn</small></label>
         <div class="quota-zone" data-role="quotas"></div>
-        <div class="console-title"><span>codex-solgoodman</span><button data-role="clear-log" class="tiny">clear view</button></div>
+        <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">clear view</button></div>
         <pre class="console" data-role="console"></pre>
       </article>
 
       <article class="agent-card glass" data-key="spark">
         <div class="agent-head">
-          <div><div class="eyebrow">MICRO WORKER</div><h3>Codex <span>Spark</span></h3></div>
+          <div>
+            <div class="eyebrow" data-role="lane">SECONDARY WORKER</div>
+            <h3><strong data-role="name">Secondary worker</strong> <span data-role="effort-badge"></span></h3>
+            <div class="agent-role" data-role="role"></div>
+          </div>
           <span class="state-dot"><i></i><b data-role="state">offline</b></span>
         </div>
-        <div class="agent-facts"><span data-role="model">gpt-5.3-codex-spark</span><span data-role="usage">0 tokens</span></div>
-        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Spark reasoning"></select><small>next turn</small></label>
+        <div class="agent-facts"><span data-role="model">model</span><span data-role="usage">0 tokens</span></div>
+        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span data-role="optional" class="badge muted" hidden>optional</span></div>
+        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Secondary worker reasoning"></select><small>next turn</small></label>
         <div class="quota-zone" data-role="quotas"></div>
-        <div class="console-title"><span>codex</span><button data-role="clear-log" class="tiny">clear view</button></div>
+        <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">clear view</button></div>
         <pre class="console" data-role="console"></pre>
       </article>
     </section>
@@ -93,11 +122,23 @@
         </div>
       </article>
 
-      <article class="chat glass">
-        <div class="section-head"><div><div class="eyebrow">DIRECT LINE</div><h2>Talk to the architect</h2></div><span class="badge">read-only</span></div>
-        <div id="chatMessages" class="chat-messages"><div class="empty">Messages to Grok appear here. Chat does not silently dispatch work.</div></div>
+      <article id="teamChat" class="chat glass">
+        <div class="section-head">
+          <div><div class="eyebrow">DIRECT LINES</div><h2 id="chatChannelTitle">Talk to the team</h2></div>
+          <span class="badge">read-only</span>
+        </div>
+        <div class="chat-toolbar">
+          <label><span>Participant</span><select id="chatRecipient" aria-label="Chat participant"></select></label>
+          <label><span>Delivery</span><select id="chatDelivery" aria-label="Message delivery">
+            <option value="auto">Auto: chat or queue</option>
+            <option value="chat">Talk now</option>
+            <option value="nudge">Nudge next turn</option>
+          </select></label>
+        </div>
+        <p id="chatHint" class="chat-hint">Direct chats are read-only. A nudge is durably attached to the participant's next model turn.</p>
+        <div id="chatMessages" class="chat-messages"><div class="empty">Choose a participant and send a message.</div></div>
         <form id="chatForm" class="chat-form">
-          <textarea id="chatInput" rows="2" placeholder="Ask what happened, why a task was routed, or give an explicit steering instruction."></textarea>
+          <textarea id="chatInput" rows="2" placeholder="Ask, challenge a decision, or queue a steering note for the next turn."></textarea>
           <button class="primary" type="submit">Send</button>
         </form>
       </article>

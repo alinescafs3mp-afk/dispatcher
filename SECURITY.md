@@ -2,13 +2,14 @@
 
 ## Threat model
 
-Nightshift assumes the target repository and model output may contain mistakes. It does **not** assume a deliberately hostile repository is safe to execute on the same Unix account as personal credentials.
+Sol Link Dispatcher assumes the target repository and model output may contain mistakes. It does **not** assume a deliberately hostile repository is safe to execute on the same Unix account as personal credentials.
 
 The default design reduces blast radius with:
 
 - separate integration, architect and worker worktrees;
 - no direct edits to the source checkout;
-- Codex sandboxing and read-only Grok architect mode;
+- read-only architect and direct-chat turns in both operating profiles;
+- sandboxed Codex and Grok worker turns;
 - no provider API keys in configuration;
 - removal of credential-shaped environment variables from child processes;
 - protected path filters and pre-commit secret-shaped content scanning;
@@ -37,15 +38,21 @@ The dashboard has no authentication. Defaults bind to `127.0.0.1`. Browser-origi
 
 ## Subscription credentials
 
-Nightshift uses the CLIs' existing local login state. It does not print, persist or intentionally read bearer token values. It strips common API-key variables so commands do not silently switch to metered API billing.
+Dispatcher uses the CLIs' existing local login state. It does not print, persist or intentionally read bearer token values. It strips common API-key variables so commands do not silently switch to metered API billing.
 
-The CLI processes still need access to their own auth stores. Anyone who controls the same OS account may already be able to use those subscriptions, independently of Nightshift.
+The CLI processes still need access to their own auth stores. Anyone who controls the same OS account may already be able to use those subscriptions, independently of Dispatcher.
+
+## Profiles and direct messages
+
+Changing the operating profile rewires logical participants to different physical CLI accounts. Dispatcher serializes profile changes against model turns, mission setup, quota probes and doctor probes. Every mission records its profile and restores it during resume.
+
+Direct participant chat is read-only. Queued nudges are stored in SQLite and appended to a participant's next eligible prompt. They remain subject to the active task packet, stop conditions and deterministic safety boundaries. Do not treat chat as an authorization channel for bypassing a human gate or enabling `unsafe_full_access`.
 
 ## Secret detection limitations
 
 Credential-shaped scanning catches common private keys, provider tokens, auth headers and secret assignments. It can have false positives and cannot recognize every encoding or custom secret format. Protected paths should therefore be expanded for the target project.
 
-Unsafe worker files are discarded before a Nightshift commit. The original source checkout is not cleaned or modified, so pre-existing secrets there remain the operator's responsibility.
+Unsafe worker files are discarded before a Dispatcher commit. The original source checkout is not cleaned or modified, so pre-existing secrets there remain the operator's responsibility.
 
 ## Validation commands
 
