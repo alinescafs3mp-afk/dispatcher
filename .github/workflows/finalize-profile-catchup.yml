@@ -29,15 +29,18 @@ jobs:
           set -euo pipefail
           exec > >(tee transport.log) 2>&1
           wc -c .catchup-final/payload-*.b64
-          sha256sum .catchup-final/payload-*.b64
-          cat .catchup-final/payload-*.b64 | tr -d '\n' > /tmp/profile-catchup.patch.b64
-          wc -c /tmp/profile-catchup.patch.b64
+          head -c 20000 .catchup-final/payload-00.b64 > /tmp/payload-00.exact.b64
+          echo 'c6279cd21f13cf23fd2a685e16bb22fb4f2a94cee4ac7904dd85224cf59d2946  /tmp/payload-00.exact.b64' | sha256sum --check --strict
+          cat /tmp/payload-00.exact.b64 \
+              .catchup-final/payload-01.b64 \
+              .catchup-final/payload-02.b64 \
+              .catchup-final/payload-03.b64 \
+            | tr -d '\n' > /tmp/profile-catchup.patch.b64
+          test "$(wc -c < /tmp/profile-catchup.patch.b64)" = '65680'
           base64 --decode /tmp/profile-catchup.patch.b64 > /tmp/profile-catchup.patch.gz
-          sha256sum /tmp/profile-catchup.patch.gz
           echo '89cbfab6485093de5ffcff43d18677dc50306bb28c71eb9bcd0b05a8b9411c56  /tmp/profile-catchup.patch.gz' | sha256sum --check --strict
           gzip -t /tmp/profile-catchup.patch.gz
           gzip -dc /tmp/profile-catchup.patch.gz > /tmp/profile-catchup.patch
-          sha256sum /tmp/profile-catchup.patch
           echo 'ffac34f97a21a501daaca499b72ae7e655b425f02558f08e8149ff3c6a5d4b5c  /tmp/profile-catchup.patch' | sha256sum --check --strict
 
       - name: Rebuild from exact current main tree
