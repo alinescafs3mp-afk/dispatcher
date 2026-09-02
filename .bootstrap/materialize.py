@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import itertools
 import os
 import shutil
 import tarfile
@@ -24,18 +25,34 @@ def destination_for(name: str) -> Path:
     return destination
 
 
+def verified_payload(chunks: list[Path]) -> tuple[bytes, tuple[str, ...]]:
+    # The initial transport committed its shorter tail chunk first. Recover the
+    # intended order by checksum instead of trusting filenames or silently
+    # accepting corrupt data. Five chunks means only 120 bounded candidates.
+    bodies = {path.name: path.read_text(encoding="ascii").strip() for path in chunks}
+    preferred = tuple(path.name for path in chunks)
+    candidates = itertools.chain([preferred], itertools.permutations(bodies))
+    seen: set[tuple[str, ...]] = set()
+    for order in candidates:
+        if order in seen:
+            continue
+        seen.add(order)
+        try:
+            payload = base64.b64decode("".join(bodies[name] for name in order), validate=True)
+        except ValueError:
+            continue
+        if hashlib.sha256(payload).hexdigest() == EXPECTED_SHA256:
+            return payload, order
+    raise RuntimeError("no chunk ordering matches the staged archive checksum")
+
+
 def main() -> None:
     chunks = sorted(BOOTSTRAP.glob("chunk-*.b64"))
     if not chunks:
         print("Bootstrap chunks are absent; source is already materialized.")
         return
 
-    encoded = "".join(path.read_text(encoding="ascii").strip() for path in chunks)
-    payload = base64.b64decode(encoded, validate=True)
-    actual = hashlib.sha256(payload).hexdigest()
-    if actual != EXPECTED_SHA256:
-        raise RuntimeError(f"archive checksum mismatch: {actual}")
-
+    payload, order = verified_payload(chunks)
     archive_path = BOOTSTRAP / "source.tar.gz"
     archive_path.write_bytes(payload)
     extracted = 0
@@ -59,7 +76,7 @@ def main() -> None:
             extracted += 1
 
     shutil.rmtree(BOOTSTRAP)
-    print(f"Materialized {extracted} files; sha256={actual}")
+    print(f"Materialized {extracted} files; chunk_order={','.join(order)}")
 
 
 if __name__ == "__main__":
