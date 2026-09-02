@@ -1,0 +1,37 @@
+name: materialize-source
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".bootstrap/**"
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Rebuild verified source tree
+        run: |
+          if [ -d .bootstrap ]; then
+            python .bootstrap/materialize.py
+          else
+            echo "Source is already materialized."
+          fi
+      - name: Commit materialized source
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No materialization changes."
+            exit 0
+          fi
+          git config user.name "Friday Dispatcher Bootstrap"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: add Friday emergency dispatcher"
+          git push
