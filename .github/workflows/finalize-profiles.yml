@@ -1,0 +1,138 @@
+name: finalize-profiles
+
+on:
+  push:
+    branches:
+      - feature-combat-reserve-profiles
+    paths:
+      - '.profile-final/READY'
+
+permissions:
+  contents: write
+
+jobs:
+  verify-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Reconstruct exact final source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .profile-final/payload-*.b64 | tr -d '\n' | base64 --decode > /tmp/dispatcher-final-source.tar.gz
+          echo 'bc2921500cf55caffa9be6efe65b74e056dab8848aa49727a81900e30838b9f6  /tmp/dispatcher-final-source.tar.gz' | sha256sum --check --strict
+
+      - name: Replace staging branch with clean final tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git reset --hard origin/main
+          git clean -fdx
+          tar -xzf /tmp/dispatcher-final-source.tar.gz -C .
+          test ! -e .profile-final
+          test ! -e .github/workflows/apply-profiles.yml
+          test ! -e .github/workflows/finalize-profiles.yml
+          git diff --check
+
+      - name: Install development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Ruff
+        id: ruff
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          ruff check nightshift tests 2>&1 | tee ruff.log
+
+      - name: Pytest
+        id: pytest
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q --junitxml=pytest.xml 2>&1 | tee pytest.log
+
+      - name: Compile Python
+        id: compile
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m compileall -q nightshift tests 2>&1 | tee compile.log
+
+      - name: Check browser JavaScript
+        id: javascript
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          node --check nightshift/static/app.js 2>&1 | tee javascript.log
+
+      - name: Build package
+        id: build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python -m build 2>&1 | tee build.log
+
+      - name: Check patch hygiene
+        id: diff
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          git diff --check 2>&1 | tee diff.log
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-final-diagnostics
+          path: |
+            ruff.log
+            pytest.log
+            pytest.xml
+            compile.log
+            javascript.log
+            build.log
+            diff.log
+          if-no-files-found: ignore
+
+      - name: Verification gate
+        if: always()
+        shell: bash
+        run: |
+          test '${{ steps.ruff.outcome }}' = success
+          test '${{ steps.pytest.outcome }}' = success
+          test '${{ steps.compile.outcome }}' = success
+          test '${{ steps.javascript.outcome }}' = success
+          test '${{ steps.build.outcome }}' = success
+          test '${{ steps.diff.outcome }}' = success
+
+      - name: Commit verified profile implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist build
+          find . -maxdepth 3 -type d -name '*.egg-info' -prune -exec rm -rf {} +
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          rm -f ruff.log pytest.log pytest.xml compile.log javascript.log build.log diff.log
+          git config user.name 'OpenAI profile builder'
+          git config user.email 'profile-builder@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat: add combat and reserve operating profiles'
+          git push --force-with-lease=refs/heads/${GITHUB_REF_NAME}:${GITHUB_SHA} origin "HEAD:${GITHUB_REF_NAME}"
