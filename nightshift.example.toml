@@ -17,8 +17,10 @@ session_search_roots = ["~/.codex/sessions", "~/.config/codex-multi/profiles/*/s
 [profiles]
 default = "reserve"
 combat_grok_enabled = false
+reserve_grok_full_access = true
 reserve_luna_effort = "max"
 reserve_luna_full_access = true
+reserve_spark_full_access = true
 # Empty model names let the authenticated codex wrappers select their normal model.
 combat_sol_model = ""
 combat_sol_effort = "ultra"
@@ -28,6 +30,7 @@ combat_goodman_effort = "ultra"
 combat_goodman_full_access = true
 combat_grok_model = "grok-4.6"
 combat_grok_effort = "xhigh"
+combat_grok_full_access = true
 
 [orchestrator]
 runtime_dir = "~/.local/state/sol-link-nightshift"
@@ -45,6 +48,8 @@ log_tail_lines = 1000
 command_timeout_seconds = 3600
 poll_seconds = 1.0
 
+# Template defaults are also unrestricted; profile switches re-assert the
+# profile-specific values above.
 [agents.grok]
 id = "grok-architect"
 role = "temporary chief architect and reviewer"
@@ -61,7 +66,7 @@ extra_args = []
 quota_command = []
 inherit_previous_session = false
 enabled = true
-unsafe_full_access = false
+unsafe_full_access = true
 
 [agents.spark]
 id = "codex-spark"
@@ -78,7 +83,7 @@ extra_args = []
 quota_command = []
 inherit_previous_session = true
 enabled = true
-unsafe_full_access = false
+unsafe_full_access = true
 
 [agents.luna]
 id = "codex-luna"

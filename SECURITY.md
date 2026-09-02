@@ -26,10 +26,10 @@ The requested defaults intentionally differ by profile:
 
 - **Combat Sol** (`codex`): Ultra reasoning and Codex sandbox bypass for automated architect/review turns.
 - **Combat SolGoodman** (`codex-solgoodman`): Ultra reasoning and Codex sandbox bypass for implementation turns.
+- **Optional combat Grok helper**: Grok `--always-approve --sandbox off` for implementation turns.
+- **Reserve Grok architect/reviewer**: Grok `--always-approve --sandbox off` for automated turns.
 - **Reserve Luna** (`codex-solgoodman`): Max reasoning and Codex sandbox bypass for implementation turns.
-- **Reserve Spark**: `workspace-write` sandbox.
-- **Reserve Grok architect**: read-only sandbox.
-- **Optional combat Grok helper**: Grok workspace sandbox for implementation; direct chat remains read-only.
+- **Reserve Spark** (`codex`): Codex sandbox bypass for implementation turns.
 
 Combat Sol runs inside a disposable architect worktree that is hard-reset after every turn. Persistent product changes still require a worker diff, validation, architect review and integration. This is damage reduction, not containment: a full-access process can read or alter files reachable by the OS user and can run arbitrary commands permitted to that user.
 
@@ -43,7 +43,7 @@ For an unknown or hostile repository:
 
 1. create a dedicated Unix user, container or VM;
 2. mount only the target repository and the minimum required CLI auth homes;
-3. disable `reserve_luna_full_access`, `combat_sol_full_access` and `combat_goodman_full_access`;
+3. disable `reserve_grok_full_access`, `reserve_luna_full_access`, `reserve_spark_full_access`, `combat_sol_full_access`, `combat_goodman_full_access`, and `combat_grok_full_access`;
 4. do not expose SSH, cloud, browser, GitHub or password-manager credentials;
 5. disable network access outside required provider endpoints where practical;
 6. inspect the integration branch and validation evidence before any merge or push.

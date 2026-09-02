@@ -28,15 +28,15 @@ Never infer predecessor identity from the executable name. Resume or summarize p
 
 #### Execution posture
 
-Luna runs at its strongest supported reasoning level, `max`, with full Codex permissions for implementation turns. Spark remains in `workspace-write`. Grok remains read-only as architect and reviewer. A human direct chat with any participant is always read-only; only an explicitly queued nudge is attached to a later work turn.
+Luna runs at its strongest supported reasoning level, `max`. Grok, Luna, and Spark all use the operator-approved full-access posture for automated work: Grok runs with `--always-approve --sandbox off`, while both Codex lanes use the sandbox/approval bypass. A human direct chat with any participant is always read-only; only an explicitly queued nudge is attached to a later work turn.
 
-Full permissions do not waive Nightshift policy. Luna still works in a disposable worker worktree, cannot bypass protected-path and secret scanning, and cannot integrate its own result. Deterministic scope checks, validation, Grok review, risk escalation, and the human gate remain authoritative.
+Full permissions do not waive Nightshift policy. Luna and Spark still work in disposable worker worktrees and cannot integrate their own result; Grok's automated architect/review turns use a disposable architect worktree that is reset after each turn. Deterministic scope checks, protected-path and secret scanning, validation, review, risk escalation, and the human gate remain authoritative.
 
 #### Known Jericho work surfaces
 
 The configured Git repository is only the primary product root. Sol and SolGoodman may also have worked from declared operational roots such as `~/.jericho`. Phase Zero must treat sessions, handoffs, watcher state, backlog fragments, and supporting artifacts from every configured `project.operational_roots` entry as relevant evidence. Do not reject a predecessor session merely because its cwd is `~/.jericho` rather than `/jericho/jericho` or a Nightshift worktree.
 
-Operational roots are continuity context, not implicit Git write or integration scopes. Preserve and report external evidence, but keep persistent product changes inside explicit worker packets and the reviewed integration branch unless the human operator deliberately establishes a separate write contract.
+Full-access participants may inspect or maintain an operational root when the mission explicitly requires it. Operational roots are not implicit Git integration scopes: preserve and report host-side effects, but keep persistent product changes inside explicit worker packets and the reviewed integration branch unless the human operator deliberately establishes a separate write contract.
 
 ### 1. Primary mission
 

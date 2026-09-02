@@ -14,7 +14,7 @@
 - `codex-solgoodman` занимает место **SolGoodman**: основной инженер, отладчик и владелец реализации;
 - `grok-build` или `grok` подключается опционально как быстрый помощник с другим углом обзора.
 
-Оба Codex-участника по умолчанию работают с `model_reasoning_effort="ultra"`. Конкретная модель оставлена за уже настроенными wrapper/profile командами `codex` и `codex-solgoodman`, поэтому Dispatcher не ломает локальный выбор Sol жёстким `--model`. Для автоматических боевых ходов обоим включён `--dangerously-bypass-approvals-and-sandbox`.
+Оба Codex-участника по умолчанию работают с `model_reasoning_effort="ultra"`. Конкретная модель оставлена за уже настроенными wrapper/profile командами `codex` и `codex-solgoodman`, поэтому Dispatcher не ломает локальный выбор Sol жёстким `--model`. Для автоматических боевых ходов обоим включён `--dangerously-bypass-approvals-and-sandbox`; опциональный Grok получает `--always-approve --sandbox off`.
 
 Sol сверяет состояние репозитория, формирует, дополняет и декомпозирует бэклог, затем выдаёт по одному ограниченному task packet. SolGoodman реализует основную работу. Подключённый Grok получает только подходящие вспомогательные пакеты. Каждая реализация проходит детерминированную проверку scope, validation, ревью архитектора и, при необходимости, human gate.
 
@@ -26,7 +26,7 @@ Sol сверяет состояние репозитория, формирует
 - `codex-solgoodman` используется как **Codex Luna**, основной аварийный исполнитель;
 - `codex` используется как **Codex Spark**, быстрый исполнитель микрозадач.
 
-Luna по умолчанию работает на самом сильном поддерживаемом reasoning `max` и с полным доступом. Spark остаётся в `workspace-write`. Grok-архитектор остаётся read-only. Резервный профиль проводит Phase Zero, восстанавливает оборванную работу, сверяет Git, локальные сессии и handoff-материалы, после чего допинывает безопасно восстановимый остаток.
+Luna по умолчанию работает на самом сильном поддерживаемом reasoning `max`. Для автоматических ходов Grok, Luna и Spark получают полный доступ: Grok запускается с `--always-approve --sandbox off`, а оба Codex-процесса с `--dangerously-bypass-approvals-and-sandbox`. Резервный профиль проводит Phase Zero, восстанавливает оборванную работу, сверяет Git, локальные сессии и handoff-материалы, после чего допинывает безопасно восстановимый остаток.
 
 > Проводка аккаунтов намеренная: в резерве локальный `codex` продолжает линию SolGoodman и становится Spark, а `codex-solgoodman` продолжает линию Sol и становится Luna. Dispatcher не угадывает владельца сессии по времени и не cross-resume-ит соседний аккаунт.
 
@@ -42,7 +42,7 @@ operational_roots = ["~/.jericho"]
 
 `project.repo` остаётся Git-источником истины и основой integration/architect/worker worktree. `operational_roots` используются как дополнительные поверхности непрерывности: там ищутся подходящие backlog/handoff-файлы, состояние watchers и учитывается `cwd` найденных Codex-сессий. Поэтому сессия Сола из `~/.jericho` получает тот же статус релевантной рабочей сессии, а не выглядит случайной только из-за другого каталога.
 
-При этом operational root не становится неявным write scope. Автоматическая интеграция по-прежнему относится к Git-репозиторию и явным task packet. Это защищает домашнее состояние от случайной записи участником с full access.
+Full-access участники могут читать и обслуживать operational root, когда это прямо требуется целью миссии или операторской подсказкой. Однако такой каталог не становится вторым неявным Git-репозиторием: Dispatcher не коммитит его побочные эффекты в integration-ветку. Продуктовые изменения по-прежнему должны проходить через `project.repo` и явный task packet.
 
 ## Прямые линии к участникам
 
@@ -140,8 +140,10 @@ nightshift --config ~/.config/nightshift/friday.toml serve
 [profiles]
 default = "reserve"
 combat_grok_enabled = false
+reserve_grok_full_access = true
 reserve_luna_effort = "max"
 reserve_luna_full_access = true
+reserve_spark_full_access = true
 
 # Пустое имя модели оставляет выбор за локальным wrapper/profile.
 combat_sol_model = ""
@@ -153,6 +155,7 @@ combat_goodman_full_access = true
 
 combat_grok_model = "grok-4.6"
 combat_grok_effort = "xhigh"
+combat_grok_full_access = true
 ```
 
 Reasoning picker в интерфейсе сохраняется отдельно для каждого профиля и логического lane. Новое значение применяется со следующего обращения к модели.
@@ -161,7 +164,7 @@ Reasoning picker в интерфейсе сохраняется отдельно
 
 Каждая миссия имеет отдельные integration, architect и worker worktree. Исходный checkout не используется как рабочий каталог моделей.
 
-Полный доступ для боевых Солов и резервной Luna включён намеренно под доверенный Friday. Это означает реальный bypass sandbox у соответствующего Codex-процесса. Отдельные worktree, protected paths, secret scanning, validation и human gate уменьшают blast radius, но не превращают процесс в VM security boundary.
+Полный доступ для всех автоматических участников обоих профилей включён намеренно под доверенный Friday. Для Codex это реальный bypass approvals и sandbox; для Grok это `--always-approve --sandbox off`. Отдельные worktree, protected paths, secret scanning, validation и human gate уменьшают blast radius, но не превращают процесс в VM security boundary.
 
 Даже для full-access участников direct chat всегда запускается read-only. Автоматический боевой Sol работает в disposable architect worktree, который жёстко сбрасывается после каждого хода. Долговечные изменения продукта всё равно проходят через worker branch, validation, review и integration.
 

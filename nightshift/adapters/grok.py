@@ -10,6 +10,18 @@ from ..protocol import limit_like
 from .base import AgentAdapter, EventCallback
 
 
+def _sandbox_resume_mismatch(text: str) -> bool:
+    lowered = text.lower()
+    return (
+        "sandbox" in lowered
+        and ("resume" in lowered or "session" in lowered)
+        and any(
+            token in lowered
+            for token in ("differ", "mismatch", "refus", "saved profile", "cannot change")
+        )
+    )
+
+
 def _first_text(obj: Any) -> str:
     if isinstance(obj, str):
         return obj
@@ -79,16 +91,17 @@ class GrokAdapter(AgentAdapter):
         if self.config.max_turns:
             command += ["--max-turns", str(self.config.max_turns)]
         if read_only:
-            # A headless architect must not stop for approval prompts, but the
-            # read-only sandbox remains the actual filesystem/network boundary.
+            # Direct operator chat, explicit consultation, and recovery inspection
+            # remain non-mutating even for a normally full-access participant.
             command += [
                 "--always-approve",
                 "--sandbox", "read-only",
                 "--disallowed-tools", "Edit,Write,NotebookEdit",
             ]
+        elif self.config.unsafe_full_access:
+            # The operator explicitly trusts automated Grok turns with host access.
+            command += ["--always-approve", "--sandbox", "off"]
         else:
-            # Grok only receives a writable checkout for explicitly approved
-            # implementation work. The workspace sandbox keeps writes scoped.
             command += ["--always-approve", "--sandbox", "workspace"]
         command += self.config.extra_args
         if existing:
@@ -148,6 +161,32 @@ class GrokAdapter(AgentAdapter):
             on_line=on_line,
         )
         combined = (result.stdout + "\n" + result.stderr).strip()
+        if session_id and result.returncode != 0 and _sandbox_resume_mismatch(combined):
+            await event(
+                "log",
+                {
+                    "stream": "stderr",
+                    "text": (
+                        "Stored Grok session used a different sandbox profile; "
+                        "starting a fresh session with the active permission policy."
+                    ),
+                },
+            )
+            actual_session = str(uuid.uuid4())
+            final_chunks.clear()
+            usage = Usage()
+            raw_events = 0
+            limit_detected = False
+            command = self._command(cwd, actual_session, False, prompt, read_only)
+            result = await self.runner.run(
+                self.config.id,
+                command,
+                cwd,
+                timeout=self.config.timeout_seconds,
+                env=self.config.subprocess_env(),
+                on_line=on_line,
+            )
+            combined = (result.stdout + "\n" + result.stderr).strip()
         if limit_like(combined):
             limit_detected = True
         final_text = "".join(final_chunks).strip()

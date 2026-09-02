@@ -59,7 +59,10 @@ _PROFILES: dict[str, ProfileSpec] = {
         worker_keys=("luna", "spark"),
         slot_order=("grok", "luna", "spark"),
         recover_predecessors=True,
-        architect_read_only=True,
+        # The emergency architect is trusted with the same full host posture as
+        # the workers. Its disposable architect worktree is still reset after
+        # every automated turn; direct chats and predecessor recovery stay read-only.
+        architect_read_only=False,
         slots={
             "grok": SlotSpec(
                 source_key="grok",
@@ -166,9 +169,13 @@ def resolve_profile_agents(
         config.physical_key = slot.source_key
         config.optional = slot.optional
         if profile_id == "reserve":
-            if logical_key == "luna":
+            if logical_key == "grok":
+                config.unsafe_full_access = profile_config.reserve_grok_full_access
+            elif logical_key == "luna":
                 config.effort = profile_config.reserve_luna_effort
                 config.unsafe_full_access = profile_config.reserve_luna_full_access
+            else:
+                config.unsafe_full_access = profile_config.reserve_spark_full_access
         else:
             if logical_key == "grok":
                 config.model = profile_config.combat_sol_model
@@ -181,6 +188,7 @@ def resolve_profile_agents(
             else:
                 config.model = profile_config.combat_grok_model
                 config.effort = profile_config.combat_grok_effort
+                config.unsafe_full_access = profile_config.combat_grok_full_access
                 config.enabled = bool(config.enabled and combat_grok_enabled)
         if config.effort and config.effort not in config.effort_options:
             config.effort_options.append(config.effort)
@@ -285,8 +293,9 @@ def profile_prompt_context(
             "Do not assume relevant history or operational evidence was created from "
             "the repository cwd. Sessions, handoffs, watcher state, and supporting "
             "artifacts may originate from any listed root.",
-            "Additional operational roots are continuity context, not implicit Git "
-            "write or integration scopes. Persistent product changes still follow "
-            "the active task packet and reviewed integration path.",
+            "Full-access participants may inspect or maintain an operational root "
+            "when the mission explicitly requires it. Those host-side effects are not "
+            "implicit Git integration scopes: persistent product changes still follow "
+            "the active task packet and reviewed repository integration path.",
         ]
     return "\n".join(lines)

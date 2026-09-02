@@ -38,12 +38,14 @@ def test_reserve_profile_preserves_emergency_wiring() -> None:
     )
     assert agents["grok"].adapter == "grok"
     assert agents["grok"].display_name == "Grok 4.6"
+    assert agents["grok"].unsafe_full_access is True
     assert agents["luna"].binary_candidates == ["codex-solgoodman"]
     assert agents["luna"].effort == "max"
     assert agents["luna"].unsafe_full_access is True
     assert agents["spark"].binary_candidates == ["codex"]
     assert agents["spark"].model == "gpt-5.3-codex-spark"
-    assert get_profile("reserve").architect_read_only is True
+    assert agents["spark"].unsafe_full_access is True
+    assert get_profile("reserve").architect_read_only is False
 
 
 def test_combat_profile_maps_sol_goodman_and_optional_grok() -> None:
@@ -68,6 +70,7 @@ def test_combat_profile_maps_sol_goodman_and_optional_grok() -> None:
     assert agents["spark"].adapter == "grok"
     assert agents["spark"].display_name == "Grok 4.6"
     assert agents["spark"].optional is True
+    assert agents["spark"].unsafe_full_access is True
     assert agents["spark"].enabled is False
     assert get_profile("combat").architect_read_only is False
 
@@ -100,7 +103,8 @@ def test_profile_prompt_names_repository_and_operational_roots() -> None:
 
     assert "`/jericho/jericho`" in prompt
     assert "`~/.jericho`" in prompt
-    assert "not implicit Git write or integration scopes" in prompt
+    assert "may inspect or maintain an operational root" in prompt
+    assert "not implicit Git integration scopes" in prompt
 
 
 def test_task_packets_require_bounded_paths_and_acceptance_evidence() -> None:
@@ -136,6 +140,7 @@ def test_requested_full_access_posture_reaches_codex_commands(tmp_path: Path) ->
 
     cases = [
         (reserve["luna"], 'model_reasoning_effort="max"'),
+        (reserve["spark"], 'model_reasoning_effort="high"'),
         (combat["grok"], 'model_reasoning_effort="ultra"'),
         (combat["luna"], 'model_reasoning_effort="ultra"'),
     ]
@@ -247,7 +252,9 @@ async def test_combat_grok_accepts_bounded_medium_work_and_reroutes_high_risk(
 
 
 @pytest.mark.asyncio
-async def test_combat_architect_turn_uses_requested_full_access_posture(
+@pytest.mark.parametrize("profile_id", ["reserve", "combat"])
+async def test_architect_turn_uses_requested_full_access_posture(
+    profile_id: str,
     git_repo: Path,
     tmp_path: Path,
 ) -> None:
@@ -286,7 +293,7 @@ async def test_combat_architect_turn_uses_requested_full_access_posture(
     orch = NightshiftOrchestrator(make_settings(git_repo, tmp_path))
     fake = ArchitectAdapter()
     try:
-        await orch.set_profile("combat", combat_grok_enabled=False)
+        await orch.set_profile(profile_id, combat_grok_enabled=False)
         orch.workspace = Workspace()  # type: ignore[assignment]
         orch.adapters["grok"] = fake  # type: ignore[assignment]
         decision = await orch._ask_architect_decision("inspect", phase="test")

@@ -13,7 +13,7 @@ It is not a generic free-form group chat. One logical architect serializes task 
 
 `project.repo` is the Git-backed product root and the only implicit integration scope. `project.operational_roots` lists additional Jericho work surfaces, such as `~/.jericho`, that may contain predecessor session cwd evidence, handoffs, watcher state, backlog fragments, or other continuity artifacts. The active profile prompt names all configured roots, session ranking accepts cwd values under any of them, and the forensic scanner reads only configured backlog/watcher patterns while applying protected-path filters and redaction.
 
-Operational roots do not become automatic write scopes. Persistent product changes still pass through mission worktrees, deterministic scope enforcement, review, and integration.
+Full-access participants may inspect or maintain an operational root when the mission explicitly requires it. Operational roots do not become automatic Git integration scopes: persistent product changes still pass through mission worktrees, deterministic scope enforcement, review, and integration, while host-side operational effects remain operator-managed.
 
 ## Stable logical lanes and physical CLIs
 
@@ -47,10 +47,10 @@ Permissions are resolved together with the profile, not inferred from a display 
 
 - combat Sol: Ultra reasoning and Codex full-access bypass for automated architect/review turns;
 - combat SolGoodman: Ultra reasoning and Codex full-access bypass for implementation turns;
+- optional combat Grok helper: Grok `--always-approve --sandbox off` for implementation turns;
+- reserve Grok architect/reviewer: Grok `--always-approve --sandbox off` for automated turns;
 - reserve Luna: Max reasoning and Codex full-access bypass for implementation turns;
-- reserve Spark: `workspace-write`;
-- reserve Grok architect: read-only;
-- optional combat Grok helper: Grok workspace sandbox for implementation.
+- reserve Spark: Codex full-access bypass for implementation turns.
 
 Every direct operator chat is read-only, including chats with full-access participants. Combat Sol's automated full-access turns run in the detached architect worktree, which is hard-reset to the integration HEAD before and after each turn. Persistent product changes still flow through worker branches and review.
 

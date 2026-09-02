@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from nightshift.adapters.codex import CodexAdapter
-from nightshift.adapters.grok import GrokAdapter, _first_text, _usage_from
+from nightshift.adapters.grok import (
+    GrokAdapter,
+    _first_text,
+    _sandbox_resume_mismatch,
+    _usage_from,
+)
 from nightshift.config import default_settings
 from nightshift.process import ProcessRunner
 
@@ -53,8 +58,27 @@ def test_grok_write_command(tmp_path: Path) -> None:
     adapter.binary = "/bin/echo"
     command = adapter._command(tmp_path, "sid", True, "hello", False)
     assert "--always-approve" in command
-    assert command[command.index("--sandbox") + 1] == "workspace"
+    assert command[command.index("--sandbox") + 1] == "off"
     assert command[command.index("--resume") + 1] == "sid"
+
+
+def test_grok_workspace_fallback_when_full_access_is_disabled(tmp_path: Path) -> None:
+    config = default_settings().agent("grok")
+    config.binary_candidates = ["/bin/echo"]
+    config.unsafe_full_access = False
+    adapter = GrokAdapter(config, ProcessRunner())
+    adapter.binary = "/bin/echo"
+
+    command = adapter._command(tmp_path, "sid", False, "hello", False)
+
+    assert command[command.index("--sandbox") + 1] == "workspace"
+
+
+def test_grok_detects_resumed_session_sandbox_mismatch() -> None:
+    assert _sandbox_resume_mismatch(
+        "Cannot resume session because the saved sandbox profile differs from off"
+    )
+    assert not _sandbox_resume_mismatch("session failed because the model is unavailable")
 
 
 def test_grok_event_text_and_usage() -> None:

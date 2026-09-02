@@ -205,7 +205,7 @@ function renderAgents() {
     access.textContent = fullAccess ? 'full access' : 'sandboxed';
     access.className = `badge ${fullAccess ? 'full-access' : 'sandboxed'}`;
     access.title = fullAccess
-      ? 'Implementation and automated architect turns may bypass the Codex sandbox. Direct chats remain read-only.'
+      ? "Automated work and architect turns may use the participant CLI's full host-access mode. Direct chats remain read-only."
       : 'This participant stays inside its configured CLI sandbox.';
 
     const messageButton = $('[data-role="message-agent"]', card);

@@ -185,6 +185,6 @@ async def test_full_takeover_spark_limit_falls_back_to_luna_and_completes(
         } <= event_types
         assert len(scripted["spark"].calls) == 1
         assert len(scripted["luna"].calls) == 1
-        assert all(call["read_only"] for call in scripted["grok"].calls)
+        assert all(not call["read_only"] for call in scripted["grok"].calls)
     finally:
         await orchestrator.close()

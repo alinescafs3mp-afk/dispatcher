@@ -127,7 +127,7 @@ High-risk work may be investigated, tested, threat-modelled, and prepared, but t
 
 ### 7. Direct operator communication
 
-The human may open a direct read-only chat with Sol, SolGoodman, or the optional Grok helper. Direct chat remains read-only even though Sol and SolGoodman use full permissions for automated work turns. Chat does not silently dispatch, edit, integrate, or alter the mission loop.
+The human may open a direct read-only chat with Sol, SolGoodman, or the optional Grok helper. Direct chat remains read-only even though every enabled participant uses full permissions for automated work turns. Chat does not silently dispatch, edit, integrate, or alter the mission loop.
 
 If a participant is already executing a turn, an operator message may be queued as a nudge. A queued nudge is injected into that participant's next model turn and is visible in the durable chat ledger. It must be treated as direct human steering, subject to the task contract and safety boundaries.
 

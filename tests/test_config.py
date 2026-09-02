@@ -12,7 +12,9 @@ def test_default_subscription_wiring() -> None:
     assert settings.agent("luna").binary_candidates == ["codex-solgoodman"]
     assert settings.agent("luna").model == "gpt-5.6-luna"
     assert settings.agent("luna").unsafe_full_access is True
+    assert settings.agent("spark").unsafe_full_access is True
     assert settings.agent("grok").model == "grok-4.6"
+    assert settings.agent("grok").unsafe_full_access is True
     assert settings.project.operational_roots == ["~/.jericho"]
 
 
@@ -35,9 +37,12 @@ def test_render_example_round_trip(tmp_path: Path) -> None:
     assert settings.agent("grok").scrub_sensitive_env is True
     assert settings.agent("spark").inherit_previous_session is True
     assert settings.profiles.reserve_luna_effort == "max"
+    assert settings.profiles.reserve_grok_full_access is True
     assert settings.profiles.reserve_luna_full_access is True
+    assert settings.profiles.reserve_spark_full_access is True
     assert settings.profiles.combat_sol_full_access is True
     assert settings.profiles.combat_goodman_full_access is True
+    assert settings.profiles.combat_grok_full_access is True
     assert settings.project.operational_roots == ["~/.jericho"]
 
 
