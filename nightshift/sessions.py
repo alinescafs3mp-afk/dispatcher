@@ -97,9 +97,11 @@ def summarize_session(path: Path, repo: Path) -> SessionSummary | None:
         if subtype in {"user_message", "user"} or role == "user":
             if text:
                 users.append(text)
-        elif subtype in {"agent_message", "assistant_message", "assistant"} or role == "assistant":
-            if text:
-                assistants.append(text)
+        elif text and (
+            subtype in {"agent_message", "assistant_message", "assistant"}
+            or role == "assistant"
+        ):
+            assistants.append(text)
     if not session_id:
         # Rollout filenames usually end with a UUID, but the timestamp itself
         # also contains dashes, so splitting on "-" cannot recover it.

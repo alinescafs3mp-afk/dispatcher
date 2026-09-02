@@ -626,10 +626,7 @@ class NightshiftOrchestrator:
         self.db.add_chat("user", text)
         await self._emit("chat.message", {"role": "user", "text": text}, sender="human")
         digest = self._mission_digest() if self.mission_id else "No active Nightshift mission."
-        prompt = chat_prompt(text) + "
-
-Current compact mission ledger:
-" + compact_text(
+        prompt = chat_prompt(text) + "\n\nCurrent compact mission ledger:\n" + compact_text(
             digest, 9000
         )
         async with self.agent_locks["grok"]:
@@ -658,8 +655,7 @@ Current compact mission ledger:
                 except Exception as exc:
                     result = result.model_copy(update={
                         "ok": False,
-                        "error": (result.error + f"
-Architect worktree reset failed: {exc}").strip(),
+                        "error": (result.error + f"\nArchitect worktree reset failed: {exc}").strip(),
                     })
             await self._set_agent(
                 "grok",
@@ -876,9 +872,7 @@ Select exactly one safe continuation task, or declare completion only after the 
                 self._grok_turns = 0
                 prompt = (
                     "This is a rotated architect session. Reconstruct continuity from the repository, "
-                    "Nightshift ledger, and the prompt below. The emergency directive remains binding.
-
-"
+                    "Nightshift ledger, and the prompt below. The emergency directive remains binding.\n\n"
                     + prompt
                 )
                 await self._emit("architect.session_rotated", {"phase": phase})
@@ -908,8 +902,7 @@ Select exactly one safe continuation task, or declare completion only after the 
                 except Exception as exc:
                     result = result.model_copy(update={
                         "ok": False,
-                        "error": (result.error + f"
-Architect worktree reset failed: {exc}").strip(),
+                        "error": (result.error + f"\nArchitect worktree reset failed: {exc}").strip(),
                     })
             await self._set_agent(
                 "grok",

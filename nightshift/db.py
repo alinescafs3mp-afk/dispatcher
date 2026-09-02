@@ -159,7 +159,7 @@ class StateDB:
             return
         pairs.append(("updated_at", utc_now()))
         clause = ",".join(f"{key}=?" for key, _ in pairs)
-        self.execute(f"UPDATE agents SET {clause} WHERE id=?", tuple(value for _, value in pairs) + (agent_id,))
+        self.execute(f"UPDATE agents SET {clause} WHERE id=?", (*tuple(value for _, value in pairs), agent_id))
 
     def create_mission(self, mission_id: str, repo: str, goal: str, status: str,
                        directive_path: str = "") -> None:
@@ -184,7 +184,7 @@ class StateDB:
         pairs.append(("updated_at", utc_now()))
         clause = ",".join(f"{key}=?" for key, _ in pairs)
         self.execute(f"UPDATE missions SET {clause} WHERE id=?",
-                     tuple(value for _, value in pairs) + (mission_id,))
+                     (*tuple(value for _, value in pairs), mission_id))
 
     def create_task(self, mission_id: str, task_id: str, packet: dict[str, Any],
                     status: str, base_sha: str = "") -> None:
@@ -213,7 +213,7 @@ class StateDB:
         pairs.append(("updated_at", utc_now()))
         clause = ",".join(f"{key}=?" for key, _ in pairs)
         self.execute(f"UPDATE tasks SET {clause} WHERE id=?",
-                     tuple(value for _, value in pairs) + (task_id,))
+                     (*tuple(value for _, value in pairs), task_id))
 
     def add_event(self, sender: str, recipient: str, event_type: str,
                   payload: dict[str, Any], mission_id: str = "", task_id: str = "") -> int:

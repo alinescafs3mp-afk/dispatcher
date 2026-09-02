@@ -1,442 +1,182 @@
 
 ===== ruff check nightshift tests =====
-RUF005 Consider `(*tuple(value for _, value in pairs), agent_id)` instead of concatenation
-   --> nightshift/db.py:162:64
-    |
-160 |         pairs.append(("updated_at", utc_now()))
-161 |         clause = ",".join(f"{key}=?" for key, _ in pairs)
-162 |         self.execute(f"UPDATE agents SET {clause} WHERE id=?", tuple(value for _, value in pairs) + (agent_id,))
-    |                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-163 |
-164 |     def create_mission(self, mission_id: str, repo: str, goal: str, status: str,
-    |
-help: Replace with `(*tuple(value for _, value in pairs), agent_id)`
+I001 [*] Import block is un-sorted or un-formatted
+  --> nightshift/orchestrator.py:1:1
+   |
+ 1 | / from __future__ import annotations
+ 2 | |
+ 3 | | import asyncio
+ 4 | | import json
+ 5 | | import re
+ 6 | | import shutil
+ 7 | | import uuid
+ 8 | | from datetime import datetime, timezone
+ 9 | | from pathlib import Path
+10 | | from typing import Any
+11 | |
+12 | | from pydantic import ValidationError
+13 | |
+14 | | from .adapters import CodexAdapter, GrokAdapter
+15 | | from .config import Settings
+16 | | from .db import StateDB
+17 | | from .events import EventHub
+18 | | from .forensics import ForensicsScanner
+19 | | from .git import (GitError, MissionWorkspace, WorkerTree, assess_risk,
+20 | |                   git, is_git_repo, path_violations)
+21 | | from .models import (
+22 | |     AgentResult,
+23 | |     AgentState,
+24 | |     ArchitectBlocked,
+25 | |     ArchitectDispatch,
+26 | |     ArchitectDone,
+27 | |     MissionState,
+28 | |     ReviewDecision,
+29 | |     RiskLevel,
+30 | |     TaskPacket,
+31 | |     TaskState,
+32 | |     utc_now,
+33 | | )
+34 | | from .process import ProcessRunner
+35 | | from .prompts import (
+36 | |     architect_bootstrap_prompt,
+37 | |     architect_next_prompt,
+38 | |     architect_review_prompt,
+39 | |     chat_prompt,
+40 | |     final_audit_prompt,
+41 | |     load_directive,
+42 | |     recovery_handoff_prompt,
+43 | |     worker_prompt,
+44 | | )
+45 | | from .protocol import compact_text, extract_json_dict
+46 | | from .redaction import redact, redact_value
+47 | | from .quota import (
+48 | |     codex_effort_options,
+49 | |     normalize_codex_quota,
+50 | |     normalize_grok_quota,
+51 | |     read_codex_account,
+52 | |     read_configured_quota,
+53 | |     read_grok_billing,
+54 | | )
+55 | | from .validation import run_validation
+   | |______________________________________^
+56 |
+57 |   _BUSY_AGENT_STATES = {
+   |
+help: Organize imports
+   |
+18 | from .forensics import ForensicsScanner
+   - from .git import (GitError, MissionWorkspace, WorkerTree, assess_risk,
+   -                   git, is_git_repo, path_violations)
+19 + from .git import (
+20 +     GitError,
+21 +     MissionWorkspace,
+22 +     WorkerTree,
+23 +     assess_risk,
+24 +     git,
+25 +     is_git_repo,
+26 +     path_violations,
+27 + )
+28 | from .models import (
+--------------------------------------------------------------------------------
+52 | from .protocol import compact_text, extract_json_dict
+   - from .redaction import redact, redact_value
+53 | from .quota import (
+--------------------------------------------------------------------------------
+60 | )
+61 + from .redaction import redact, redact_value
+62 | from .validation import run_validation
+   |
 
-RUF005 Consider `(*tuple(value for _, value in pairs), mission_id)` instead of concatenation
-   --> nightshift/db.py:187:22
-    |
-185 |         clause = ",".join(f"{key}=?" for key, _ in pairs)
-186 |         self.execute(f"UPDATE missions SET {clause} WHERE id=?",
-187 |                      tuple(value for _, value in pairs) + (mission_id,))
-    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-188 |
-189 |     def create_task(self, mission_id: str, task_id: str, packet: dict[str, Any],
-    |
-help: Replace with `(*tuple(value for _, value in pairs), mission_id)`
+F401 [*] `shutil` imported but unused
+ --> nightshift/orchestrator.py:6:8
+  |
+4 | import json
+5 | import re
+6 | import shutil
+  |        ^^^^^^
+7 | import uuid
+8 | from datetime import datetime, timezone
+  |
+help: Remove unused import: `shutil`
+  |
+5 | import re
+  - import shutil
+6 | import uuid
+  |
 
-RUF005 Consider `(*tuple(value for _, value in pairs), task_id)` instead of concatenation
-   --> nightshift/db.py:216:22
-    |
-214 |         clause = ",".join(f"{key}=?" for key, _ in pairs)
-215 |         self.execute(f"UPDATE tasks SET {clause} WHERE id=?",
-216 |                      tuple(value for _, value in pairs) + (task_id,))
-    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-217 |
-218 |     def add_event(self, sender: str, recipient: str, event_type: str,
-    |
-help: Replace with `(*tuple(value for _, value in pairs), task_id)`
+F401 [*] `.git.WorkerTree` imported but unused
+  --> nightshift/orchestrator.py:19:47
+   |
+17 | from .events import EventHub
+18 | from .forensics import ForensicsScanner
+19 | from .git import (GitError, MissionWorkspace, WorkerTree, assess_risk,
+   |                                               ^^^^^^^^^^
+20 |                   git, is_git_repo, path_violations)
+21 | from .models import (
+   |
+help: Remove unused import: `.git.WorkerTree`
+   |
+18 | from .forensics import ForensicsScanner
+   - from .git import (GitError, MissionWorkspace, WorkerTree, assess_risk,
+19 + from .git import (GitError, MissionWorkspace, assess_risk,
+20 |                   git, is_git_repo, path_violations)
+   |
 
-invalid-syntax: missing closing quote in string literal
-   --> nightshift/orchestrator.py:629:38
+UP017 [*] Use `datetime.UTC` alias
+   --> nightshift/orchestrator.py:476:30
     |
-627 |         await self._emit("chat.message", {"role": "user", "text": text}, sender="human")
-628 |         digest = self._mission_digest() if self.mission_id else "No active Nightshift mission."
-629 |         prompt = chat_prompt(text) + "
-    |                                      ^
-630 |
-631 | Current compact mission ledger:
+474 |         if not is_git_repo(repo):
+475 |             raise OrchestratorError(f"Not a Git repository: {repo}")
+476 |         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    |                              ^^^^^^^^^^^^
+477 |         self.mission_id = f"ns-{stamp}-{uuid.uuid4().hex[:6]}"
+478 |         self.mission_dir = self.runtime / "missions" / self.mission_id
     |
-
-invalid-syntax: Simple statements must be separated by newlines or semicolons
-   --> nightshift/orchestrator.py:631:9
+help: Convert to `datetime.UTC` alias
     |
-629 |         prompt = chat_prompt(text) + "
-630 |
-631 | Current compact mission ledger:
-    |         ^^^^^^^
-632 | " + compact_text(
-633 |             digest, 9000
-    |
-
-invalid-syntax: Simple statements must be separated by newlines or semicolons
-   --> nightshift/orchestrator.py:631:17
-    |
-629 |         prompt = chat_prompt(text) + "
-630 |
-631 | Current compact mission ledger:
-    |                 ^^^^^^^
-632 | " + compact_text(
-633 |             digest, 9000
-    |
-
-invalid-syntax: Simple statements must be separated by newlines or semicolons
-   --> nightshift/orchestrator.py:631:25
-    |
-629 |         prompt = chat_prompt(text) + "
-630 |
-631 | Current compact mission ledger:
-    |                         ^^^^^^
-632 | " + compact_text(
-633 |             digest, 9000
-    |
-
-invalid-syntax: Expected an expression
-   --> nightshift/orchestrator.py:631:32
-    |
-629 |         prompt = chat_prompt(text) + "
-630 |
-631 | Current compact mission ledger:
-    |                                ^
-632 | " + compact_text(
-633 |             digest, 9000
-    |
-
-invalid-syntax: missing closing quote in string literal
-   --> nightshift/orchestrator.py:632:1
-    |
-631 | Current compact mission ledger:
-632 | " + compact_text(
-    | ^^^^^^^^^^^^^^^^^
-633 |             digest, 9000
-634 |         )
-    |
-
-invalid-syntax: Unexpected indentation
-   --> nightshift/orchestrator.py:633:1
-    |
-631 | Current compact mission ledger:
-632 | " + compact_text(
-633 |             digest, 9000
-    | ^^^^^^^^^^^^
-634 |         )
-635 |         async with self.agent_locks["grok"]:
-    |
-
-invalid-syntax: unindent does not match any outer indentation level
-   --> nightshift/orchestrator.py:634:1
-    |
-632 | " + compact_text(
-633 |             digest, 9000
-634 |         )
-    | ^^^^^^^^
-635 |         async with self.agent_locks["grok"]:
-636 |             cwd = self.settings.project.repo_path
-    |
-
-invalid-syntax: Expected a statement
-   --> nightshift/orchestrator.py:634:9
-    |
-632 | " + compact_text(
-633 |             digest, 9000
-634 |         )
-    |         ^
-635 |         async with self.agent_locks["grok"]:
-636 |             cwd = self.settings.project.repo_path
-    |
-
-invalid-syntax: Expected a statement
-   --> nightshift/orchestrator.py:634:10
-    |
-632 | " + compact_text(
-633 |             digest, 9000
-634 |         )
-    |          ^
-635 |         async with self.agent_locks["grok"]:
-636 |             cwd = self.settings.project.repo_path
-    |
-
-invalid-syntax: Unexpected indentation
-   --> nightshift/orchestrator.py:635:1
-    |
-633 |             digest, 9000
-634 |         )
-635 |         async with self.agent_locks["grok"]:
-    | ^^^^^^^^
-636 |             cwd = self.settings.project.repo_path
-637 |             if self.workspace:
+7   | import uuid
+    - from datetime import datetime, timezone
+8   + from datetime import datetime, timezone, UTC
+9   | from pathlib import Path
+--------------------------------------------------------------------------------
+475 |             raise OrchestratorError(f"Not a Git repository: {repo}")
+    -         stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+476 +         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+477 |         self.mission_id = f"ns-{stamp}-{uuid.uuid4().hex[:6]}"
     |
 
-invalid-syntax: f-string: unterminated string
-   --> nightshift/orchestrator.py:661:52
+B904 Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
+   --> nightshift/orchestrator.py:934:17
     |
-659 |                     result = result.model_copy(update={
-660 |                         "ok": False,
-661 |                         "error": (result.error + f"
-    |                                                    ^
-662 | Architect worktree reset failed: {exc}").strip(),
-663 |                     })
-    |
-
-invalid-syntax: Expected FStringEnd, found name
-   --> nightshift/orchestrator.py:662:1
-    |
-660 |                         "ok": False,
-661 |                         "error": (result.error + f"
-662 | Architect worktree reset failed: {exc}").strip(),
-    | ^^^^^^^^^
-663 |                     })
-664 |             await self._set_agent(
+932 |             repair = await self._run_grok(repair_prompt, cwd, f"{phase}-repair", read_only=True)
+933 |             if not repair.ok:
+934 |                 raise OrchestratorError(f"Architect output repair failed: {repair.error}")
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+935 |             decision = self._parse_architect_decision(repair.final_text)
+936 |         await self._emit("architect.decision", {
     |
 
-invalid-syntax: Expected `:`, found name
-   --> nightshift/orchestrator.py:662:11
-    |
-660 |                         "ok": False,
-661 |                         "error": (result.error + f"
-662 | Architect worktree reset failed: {exc}").strip(),
-    |           ^^^^^^^^
-663 |                     })
-664 |             await self._set_agent(
-    |
-
-invalid-syntax: Expected `,`, found name
-   --> nightshift/orchestrator.py:662:20
-    |
-660 |                         "ok": False,
-661 |                         "error": (result.error + f"
-662 | Architect worktree reset failed: {exc}").strip(),
-    |                    ^^^^^
-663 |                     })
-664 |             await self._set_agent(
-    |
-
-invalid-syntax: Expected `:`, found name
-   --> nightshift/orchestrator.py:662:26
-    |
-660 |                         "ok": False,
-661 |                         "error": (result.error + f"
-662 | Architect worktree reset failed: {exc}").strip(),
-    |                          ^^^^^^
-663 |                     })
-664 |             await self._set_agent(
-    |
-
-invalid-syntax: Expected `,`, found `:`
-   --> nightshift/orchestrator.py:662:32
-    |
-660 |                         "ok": False,
-661 |                         "error": (result.error + f"
-662 | Architect worktree reset failed: {exc}").strip(),
-    |                                ^
-663 |                     })
-664 |             await self._set_agent(
-    |
-
-invalid-syntax: missing closing quote in string literal
-   --> nightshift/orchestrator.py:662:39
-    |
-660 |                         "ok": False,
-661 |                         "error": (result.error + f"
-662 | Architect worktree reset failed: {exc}").strip(),
-    |                                       ^^^^^^^^^^^
-663 |                     })
-664 |             await self._set_agent(
-    |
-
-invalid-syntax: unindent does not match any outer indentation level
-   --> nightshift/orchestrator.py:679:1
-    |
-677 |         return answer
-678 |
-679 |     async def _run_new_mission(self, mission_id: str, goal: str) -> None:
-    | ^^^^
-680 |         try:
-681 |             self.db.update_mission(mission_id, status=MissionState.RECOVERING.value)
-    |
-
-invalid-syntax: unindent does not match any outer indentation level
-   --> nightshift/orchestrator.py:719:5
-    |
-717 |             await self._fail_mission(exc)
-718 |
-719 |     async def _run_resumed_mission(self, row: dict[str, Any]) -> None:
-    |     ^
-720 |         try:
-721 |             self.db.update_mission(self.mission_id, status=MissionState.RECOVERING.value,
-    |
-
-invalid-syntax: unindent does not match any outer indentation level
-   --> nightshift/orchestrator.py:765:5
-    |
-763 |             await self._fail_mission(exc)
-764 |
-765 |     async def _decision_loop(self, decision: Any) -> None:
-    |     ^
-766 |         completed_count = int(
-767 |             self.db.query(
-    |
-
-invalid-syntax: unindent does not match any outer indentation level
-   --> nightshift/orchestrator.py:811:5
-    |
-809 |             raise OrchestratorError(f"Unsupported architect decision: {type(decision).__name__}")
-810 |
-811 |     async def _recover_predecessors(self, dossier: dict[str, Any]) -> dict[str, str]:
-    |     ^
-812 |         if not self.settings.orchestrator.recover_predecessor_sessions:
-813 |             await self._emit("recovery.predecessor_sessions_skipped", {"configured": False})
-    |
-
-invalid-syntax: unindent does not match any outer indentation level
-   --> nightshift/orchestrator.py:862:1
-    |
-860 |         return handoffs
-861 |
-862 |     @staticmethod
-    | ^^^^
-863 |     def _append_handoffs_to_dossier(path: Path, handoffs: dict[str, str]) -> None:
-864 |         if not handoffs:
-    |
-
-invalid-syntax: Expected class, function definition or async function definition after decorator
-   --> nightshift/orchestrator.py:863:1
-    |
-862 |     @staticmethod
-863 |     def _append_handoffs_to_dossier(path: Path, handoffs: dict[str, str]) -> None:
-    | ^^^^
-864 |         if not handoffs:
-865 |             return
-    |
-
-invalid-syntax: missing closing quote in string literal
-   --> nightshift/orchestrator.py:879:21
-    |
-877 |                 prompt = (
-878 |                     "This is a rotated architect session. Reconstruct continuity from the repository, "
-879 |                     "Nightshift ledger, and the prompt below. The emergency directive remains binding.
-    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-880 |
-881 | "
-    |
-
-invalid-syntax: missing closing quote in string literal
-   --> nightshift/orchestrator.py:881:1
-    |
-879 |                     "Nightshift ledger, and the prompt below. The emergency directive remains binding.
-880 |
-881 | "
-    | ^
-882 |                     + prompt
-883 |                 )
-    |
-
-invalid-syntax: f-string: unterminated string
-   --> nightshift/orchestrator.py:911:52
-    |
-909 |                     result = result.model_copy(update={
-910 |                         "ok": False,
-911 |                         "error": (result.error + f"
-    |                                                    ^
-912 | Architect worktree reset failed: {exc}").strip(),
-913 |                     })
-    |
-
-invalid-syntax: Expected FStringEnd, found name
-   --> nightshift/orchestrator.py:912:1
-    |
-910 |                         "ok": False,
-911 |                         "error": (result.error + f"
-912 | Architect worktree reset failed: {exc}").strip(),
-    | ^^^^^^^^^
-913 |                     })
-914 |             await self._set_agent(
-    |
-
-invalid-syntax: Expected `:`, found name
-   --> nightshift/orchestrator.py:912:11
-    |
-910 |                         "ok": False,
-911 |                         "error": (result.error + f"
-912 | Architect worktree reset failed: {exc}").strip(),
-    |           ^^^^^^^^
-913 |                     })
-914 |             await self._set_agent(
-    |
-
-invalid-syntax: Expected `,`, found name
-   --> nightshift/orchestrator.py:912:20
-    |
-910 |                         "ok": False,
-911 |                         "error": (result.error + f"
-912 | Architect worktree reset failed: {exc}").strip(),
-    |                    ^^^^^
-913 |                     })
-914 |             await self._set_agent(
-    |
-
-invalid-syntax: Expected `:`, found name
-   --> nightshift/orchestrator.py:912:26
-    |
-910 |                         "ok": False,
-911 |                         "error": (result.error + f"
-912 | Architect worktree reset failed: {exc}").strip(),
-    |                          ^^^^^^
-913 |                     })
-914 |             await self._set_agent(
-    |
-
-invalid-syntax: Expected `,`, found `:`
-   --> nightshift/orchestrator.py:912:32
-    |
-910 |                         "ok": False,
-911 |                         "error": (result.error + f"
-912 | Architect worktree reset failed: {exc}").strip(),
-    |                                ^
-913 |                     })
-914 |             await self._set_agent(
-    |
-
-invalid-syntax: missing closing quote in string literal
-   --> nightshift/orchestrator.py:912:39
-    |
-910 |                         "ok": False,
-911 |                         "error": (result.error + f"
-912 | Architect worktree reset failed: {exc}").strip(),
-    |                                       ^^^^^^^^^^^
-913 |                     })
-914 |             await self._set_agent(
-    |
-
-invalid-syntax: Expected dedent, found end of file
-    --> nightshift/orchestrator.py:1348:23
+B904 Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling
+    --> nightshift/orchestrator.py:1088:21
      |
-1347 |                 result.append(value)
-1348 |         return result
-     |                      ^
+1086 |                 )
+1087 |                 if not repair.ok:
+1088 |                     raise OrchestratorError("Review repair failed")
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1089 |                 latest_review = self._parse_review(repair.final_text)
+     |
 
-RUF059 Unpacked variable `next_id` is never used
-   --> nightshift/quota.py:411:35
-    |
-409 |         initialized = await receive(1)
-410 |         try:
-411 |             data, billing_method, next_id = await billing_any(2)
-    |                                   ^^^^^^^
-412 |             return {
-413 |                 "initialize": initialized,
-    |
-help: Prefix it with an underscore or any other dummy variable pattern
+RUF005 Consider iterable unpacking instead of concatenation
+    --> nightshift/orchestrator.py:1101:41
+     |
+1099 | …atest_review.model_copy(update={
+1100 | …vise",
+1101 | …nges": latest_review.required_changes + ["Make configured validation pass or provide an explicit safe replacement command"],
+     |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1102 | …odel acceptance overridden because validation failed",
+1103 | …
+     |
+help: Replace with iterable unpacking
 
-SIM102 Use a single `if` statement instead of nested `if` statements
-   --> nightshift/sessions.py:100:9
-    |
- 98 |               if text:
- 99 |                   users.append(text)
-100 | /         elif subtype in {"agent_message", "assistant_message", "assistant"} or role == "assistant":
-101 | |             if text:
-    | |____________________^
-102 |                   assistants.append(text)
-103 |       if not session_id:
-    |
-help: Combine `if` statements using `and`
-
-B023 Function definition does not bind loop variable `lines`
-  --> nightshift/validation.py:66:13
-   |
-65 |         async def on_line(stream: str, line: str) -> None:
-66 |             lines.append(f"[{stream}] {line}")
-   |             ^^^^^
-67 |             await event("log", {"stream": f"validation-{stream}", "text": line})
-   |
-
-Found 40 errors.
-No fixes available (4 hidden fixes can be enabled with the `--unsafe-fixes` option).
+Found 7 errors.
+[*] 4 fixable with the `--fix` option (1 hidden fix can be enabled with the `--unsafe-fixes` option).

@@ -408,7 +408,7 @@ async def _read_grok_billing_once(command: list[str], cwd: Path, timeout: int,
         })
         initialized = await receive(1)
         try:
-            data, billing_method, next_id = await billing_any(2)
+            data, billing_method, _next_id = await billing_any(2)
             return {
                 "initialize": initialized,
                 "billing": data,

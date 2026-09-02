@@ -62,8 +62,10 @@ async def run_validation(commands: list[str], cwd: Path, runner: ProcessRunner,
             continue
         lines: list[str] = []
 
-        async def on_line(stream: str, line: str) -> None:
-            lines.append(f"[{stream}] {line}")
+        async def on_line(
+            stream: str, line: str, captured: list[str] = lines
+        ) -> None:
+            captured.append(f"[{stream}] {line}")
             await event("log", {"stream": f"validation-{stream}", "text": line})
 
         result = await runner.run(

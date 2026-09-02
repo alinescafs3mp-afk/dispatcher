@@ -109,8 +109,7 @@ function renderAgents() {
     const nearBottom = consoleEl.scrollHeight - consoleEl.scrollTop - consoleEl.clientHeight < 50;
     const floor = Number(logFloors[key] || 0);
     const logs = (state?.logs?.[agentIds[key]] || []).filter(x => Number(x.seq || 0) > floor);
-    consoleEl.textContent = logs.map(x => `[${x.created_at.slice(11,19)}] ${x.stream.padEnd(10)} ${x.text}`).join('
-');
+    consoleEl.textContent = logs.map(x => `[${x.created_at.slice(11,19)}] ${x.stream.padEnd(10)} ${x.text}`).join('\n');
     if (nearBottom) consoleEl.scrollTop = consoleEl.scrollHeight;
   }
 }
