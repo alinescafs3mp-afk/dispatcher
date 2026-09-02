@@ -18,11 +18,20 @@ jobs:
         with:
           python-version: "3.12"
       - name: Rebuild verified source tree
-        run: python .stage/materialize.py
+        run: |
+          if [ -f .stage/materialize.py ]; then
+            python .stage/materialize.py
+          else
+            echo "Source is already materialized."
+          fi
       - name: Commit materialized source
         run: |
           git config user.name "Friday Dispatcher Bootstrap"
           git config user.email "actions@users.noreply.github.com"
           git add -A
+          if git diff --cached --quiet; then
+            echo "No materialization changes."
+            exit 0
+          fi
           git commit -m "feat: add Sol Link Nightshift orchestrator"
           git push
