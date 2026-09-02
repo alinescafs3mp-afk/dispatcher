@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager, suppress
+from collections.abc import Coroutine
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -17,6 +18,8 @@ from .config import Settings, load_settings
 from .forensics import ForensicsScanner
 from .orchestrator import NightshiftOrchestrator, OrchestratorError
 from .prompts import directive_path
+
+WEBSOCKET_HEARTBEAT_SECONDS = 15.0
 
 
 class MissionStartRequest(BaseModel):
@@ -103,7 +106,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     static_dir = Path(__file__).with_name("static")
     background_tasks: set[asyncio.Task[Any]] = set()
 
-    def spawn(coroutine) -> asyncio.Task[Any]:
+    def spawn(coroutine: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         task = asyncio.create_task(coroutine)
         background_tasks.add(task)
         task.add_done_callback(background_tasks.discard)
@@ -123,8 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for task in tasks:
                 task.cancel()
             if tasks:
-                with suppress(asyncio.CancelledError):
-                    await asyncio.gather(*tasks, return_exceptions=True)
+                await asyncio.gather(*tasks, return_exceptions=True)
             await orchestrator.close()
 
     app = FastAPI(
@@ -208,7 +210,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if request.include_quotas:
             await orch().refresh_quotas()
         scanner = ForensicsScanner(active_settings, scan_dir, orch().codex_homes)
-        report = await asyncio.to_thread(scanner.scan)
+        report = await asyncio.to_thread(
+            scanner.scan,
+            include_sessions=orch().profile.recover_predecessors,
+        )
         await orch()._emit(
             "recovery.manual_scan_ready",
             {
@@ -313,22 +318,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await websocket.close(code=1008, reason="cross-origin websocket rejected")
             return
         await websocket.accept()
+        # Register before reading SQLite. Events created while the authoritative
+        # snapshot is assembled remain queued and are either ignored as duplicates
+        # or applied immediately after the snapshot watermark.
         queue = await orch().hub.subscribe(replay=False)
         try:
+            snapshot = orch().snapshot()
             await websocket.send_json(
-                {"type": "state.snapshot", "payload": orch().snapshot()}
+                {
+                    "type": "state.snapshot",
+                    "seq": snapshot.get("event_seq", 0),
+                    "payload": snapshot,
+                }
             )
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    event = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=WEBSOCKET_HEARTBEAT_SECONDS,
+                    )
                 except TimeoutError:
                     await websocket.send_json(
                         {
                             "type": "system.heartbeat",
-                            "payload": {
-                                "sent_at": datetime.now(UTC).isoformat(),
-                                "event_seq": orch().db.latest_event_seq(),
-                            },
+                            "seq": orch().db.latest_event_seq(),
+                            "created_at": datetime.now(UTC).isoformat(),
                         }
                     )
                     continue

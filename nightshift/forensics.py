@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -20,8 +21,21 @@ class ForensicsScanner:
         self.codex_homes = codex_homes or {}
         self.out_dir = mission_dir / "forensics"
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.working_roots = self._resolve_working_roots()
 
-    def scan(self) -> dict[str, Any]:
+    def _resolve_working_roots(self) -> list[tuple[str, str, Path]]:
+        roots: list[tuple[str, str, Path]] = [
+            ("repository", self.settings.project.repo or str(self.repo), self.repo)
+        ]
+        seen = {self.repo}
+        for configured, resolved in self.settings.project.operational_root_entries:
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            roots.append(("operational", str(configured), resolved))
+        return roots
+
+    def scan(self, *, include_sessions: bool = True) -> dict[str, Any]:
         report: dict[str, Any] = {
             "repo": str(self.repo),
             "head": self._safe_git("rev-parse", "HEAD").strip(),
@@ -39,12 +53,22 @@ class ForensicsScanner:
             "worktrees": [],
             "backlog_files": [],
             "watcher_state": [],
+            "working_roots": [
+                {
+                    "kind": kind,
+                    "configured": configured,
+                    "path": str(root),
+                    "available": root.is_dir(),
+                }
+                for kind, configured, root in self.working_roots
+            ],
             "sessions": {},
+            "sessions_scanned": include_sessions,
         }
         report["worktrees"] = self._scan_worktrees()
         report["backlog_files"] = self._scan_backlog_files()
         report["watcher_state"] = self._scan_watcher_state()
-        report["sessions"] = self._scan_sessions()
+        report["sessions"] = self._scan_sessions() if include_sessions else {}
         report = redact_value(report)
         json_path = self.out_dir / "recovery.json"
         json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -89,50 +113,124 @@ class ForensicsScanner:
             result.append(item)
         return result
 
+    @staticmethod
+    def _display_context_path(kind: str, configured: str, relative: Path) -> str:
+        if kind == "repository":
+            return relative.as_posix()
+        return f"{configured.rstrip('/')}/{relative.as_posix()}"
+
+    @staticmethod
+    def _iter_root_matches(root: Path, pattern: str) -> Iterator[Path]:
+        try:
+            yield from root.glob(pattern)
+        except OSError:
+            return
+
+    def _safe_context_candidate(
+        self,
+        root: Path,
+        path: Path,
+    ) -> tuple[Path, Path] | None:
+        try:
+            resolved_root = root.resolve()
+            resolved_path = path.resolve()
+            relative = resolved_path.relative_to(resolved_root)
+        except (OSError, RuntimeError, ValueError):
+            return None
+        relative_text = relative.as_posix()
+        if (
+            ".git" in relative.parts
+            or not resolved_path.is_file()
+            or matches_any(relative_text, self.settings.project.protected_paths)
+        ):
+            return None
+        return resolved_path, relative
+
     def _scan_backlog_files(self) -> list[dict[str, Any]]:
-        found: dict[str, Path] = {}
-        for pattern in self.settings.project.backlog_globs:
-            for path in self.repo.glob(pattern):
-                if path.is_file() and ".git" not in path.parts:
-                    try:
-                        relative = path.relative_to(self.repo).as_posix()
-                    except ValueError:
+        found: dict[Path, tuple[str, str, Path, Path]] = {}
+        for kind, configured, root in self.working_roots:
+            if not root.is_dir():
+                continue
+            for pattern in self.settings.project.backlog_globs:
+                for path in self._iter_root_matches(root, pattern):
+                    candidate = self._safe_context_candidate(root, path)
+                    if candidate is None:
                         continue
-                    found[relative] = path
+                    resolved_path, relative = candidate
+                    found.setdefault(
+                        resolved_path,
+                        (kind, configured, resolved_path, relative),
+                    )
         result: list[dict[str, Any]] = []
         budget = 180_000
-        for relative, path in sorted(found.items(), key=lambda item: item[0])[:80]:
+        ordered = sorted(
+            found.values(),
+            key=lambda item: self._display_context_path(item[0], item[1], item[3]),
+        )
+        for kind, configured, path, relative in ordered[:80]:
+            display_path = self._display_context_path(kind, configured, relative)
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
+                modified_at = path.stat().st_mtime
             except OSError as exc:
-                result.append({"path": relative, "error": str(exc)})
+                result.append({"path": display_path, "error": str(exc)})
                 continue
             excerpt = compact_text(redact(text), min(18_000, budget))
             budget -= len(excerpt)
-            result.append({"path": relative, "modified_at": path.stat().st_mtime,
-                           "excerpt": excerpt})
+            result.append(
+                {
+                    "path": display_path,
+                    "source_root": configured,
+                    "resolved_path": str(path),
+                    "modified_at": modified_at,
+                    "excerpt": excerpt,
+                }
+            )
             if budget <= 0:
                 break
         return result
 
     def _scan_watcher_state(self) -> list[dict[str, Any]]:
         patterns = [
-            "**/.task_watch_state.json", "**/*watch*state*.json",
-            ".sol-link/**/*.json", "runtime/sol-link/**/*.json", "handoffs/**/*.json",
+            "**/.task_watch_state.json",
+            "**/*watch*state*.json",
+            ".sol-link/**/*.json",
+            "runtime/sol-link/**/*.json",
+            "handoffs/**/*.json",
         ]
-        found: dict[str, Path] = {}
-        for pattern in patterns:
-            for path in self.repo.glob(pattern):
-                if path.is_file() and ".git" not in path.parts:
-                    relative = path.relative_to(self.repo).as_posix()
-                    found[relative] = path
+        found: dict[Path, tuple[str, str, Path, Path]] = {}
+        for kind, configured, root in self.working_roots:
+            if not root.is_dir():
+                continue
+            for pattern in patterns:
+                for path in self._iter_root_matches(root, pattern):
+                    candidate = self._safe_context_candidate(root, path)
+                    if candidate is None:
+                        continue
+                    resolved_path, relative = candidate
+                    found.setdefault(
+                        resolved_path,
+                        (kind, configured, resolved_path, relative),
+                    )
         result: list[dict[str, Any]] = []
-        for relative, path in sorted(found.items())[:60]:
+        ordered = sorted(
+            found.values(),
+            key=lambda item: self._display_context_path(item[0], item[1], item[3]),
+        )
+        for kind, configured, path, relative in ordered[:60]:
+            display_path = self._display_context_path(kind, configured, relative)
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
             except OSError as exc:
                 text = f"<read error: {exc}>"
-            result.append({"path": relative, "content": compact_text(redact(text), 8000)})
+            result.append(
+                {
+                    "path": display_path,
+                    "source_root": configured,
+                    "resolved_path": str(path),
+                    "content": compact_text(redact(text), 8000),
+                }
+            )
         return result
 
     def _scan_sessions(self) -> dict[str, list[dict[str, Any]]]:
@@ -145,13 +243,26 @@ class ForensicsScanner:
                 # Codex home before ranking can resume Sol's session with Spark or
                 # SolGoodman's session with Luna when timestamps are close.
                 summaries = discover_sessions(
-                    [str(Path(home).expanduser() / "sessions")], self.repo, limit=10
+                    [str(Path(home).expanduser() / "sessions")],
+                    self.repo,
+                    limit=10,
+                    working_roots=self.settings.project.known_working_paths,
                 )
             if not summaries:
-                summaries = discover_sessions(configured, self.repo, limit=10)
+                summaries = discover_sessions(
+                    configured,
+                    self.repo,
+                    limit=10,
+                    working_roots=self.settings.project.known_working_paths,
+                )
             result[agent] = [summary.to_dict() for summary in summaries]
         if not result:
-            summaries = discover_sessions(configured, self.repo, limit=12)
+            summaries = discover_sessions(
+                configured,
+                self.repo,
+                limit=12,
+                working_roots=self.settings.project.known_working_paths,
+            )
             result["unassigned"] = [summary.to_dict() for summary in summaries]
         return result
 
@@ -162,6 +273,19 @@ class ForensicsScanner:
             f"Repository: `{report['repo']}`",
             f"Branch: `{report['branch']}`",
             f"HEAD: `{report['head']}`",
+            "",
+            "## Known working roots",
+        ]
+        for item in report.get("working_roots", []):
+            availability = "available" if item.get("available") else "missing"
+            lines.append(
+                f"- {item.get('kind', 'operational')}: "
+                f"`{item.get('configured', '')}` -> `{item.get('path', '')}` ({availability})"
+            )
+        lines += [
+            "",
+            "Configured operational roots are continuity evidence sources. They do not "
+            "become implicit Git write or integration scopes.",
             "",
             "## Source working tree",
             "```text",
@@ -206,12 +330,16 @@ class ForensicsScanner:
         for item in report["watcher_state"]:
             lines += [f"### `{item['path']}`", "```json", item.get("content", ""), "```"]
         lines += ["", "## Candidate predecessor Codex sessions"]
+        if not report.get("sessions_scanned", True):
+            lines.append("Session discovery skipped by the active operating profile.")
         for agent, sessions in report["sessions"].items():
             lines.append(f"### {agent}")
             for session in sessions:
                 lines += [
                     f"- Session `{session.get('session_id', '')}` | score {session.get('score', 0)} | "
-                    f"cwd `{session.get('cwd', '')}` | file `{session.get('path', '')}`",
+                    f"cwd `{session.get('cwd', '')}` | "
+                    f"matched root `{session.get('matched_root', '')}` | "
+                    f"file `{session.get('path', '')}`",
                     f"  - Last user: {compact_text(session.get('last_user', ''), 800)}",
                     f"  - Last assistant: {compact_text(session.get('last_assistant', ''), 1200)}",
                 ]

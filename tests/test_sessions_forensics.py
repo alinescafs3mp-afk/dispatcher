@@ -34,6 +34,99 @@ def test_discover_sessions_orders_repo_match(git_repo: Path, tmp_path: Path) -> 
     assert found[0].cwd == str(git_repo)
 
 
+def test_discover_sessions_accepts_additional_working_root(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    session_root = tmp_path / "sessions"
+    session_root.mkdir()
+    operational_root = tmp_path / ".jericho"
+    operational_root.mkdir()
+    unrelated = session_root / "unrelated.jsonl"
+    unrelated.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {"id": "other", "cwd": "/tmp/unrelated"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    relevant = session_root / "operational.jsonl"
+    relevant.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "jericho-root",
+                    "cwd": str(operational_root / "sol"),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    found = discover_sessions(
+        [str(session_root)],
+        git_repo,
+        working_roots=[git_repo, operational_root],
+    )
+
+    assert found[0].session_id == "jericho-root"
+    assert found[0].score >= 90
+    assert found[0].matched_root == str(operational_root.resolve())
+
+
+def test_forensics_scans_configured_operational_roots(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    operational_root = tmp_path / ".jericho"
+    operational_root.mkdir()
+    (operational_root / "HANDOFF_SOL.md").write_text(
+        "Continue from the operational root.\n",
+        encoding="utf-8",
+    )
+    watcher = operational_root / ".sol-link" / "watch-state.json"
+    watcher.parent.mkdir()
+    watcher.write_text('{"cursor": 17}\n', encoding="utf-8")
+    (operational_root / "unrelated.txt").write_text(
+        "must not be harvested",
+        encoding="utf-8",
+    )
+    git_metadata = operational_root / ".git" / "HANDOFF_INTERNAL.md"
+    git_metadata.parent.mkdir()
+    git_metadata.write_text("must stay private to git metadata", encoding="utf-8")
+    outside = tmp_path / "HANDOFF_OUTSIDE.md"
+    outside.write_text("must not cross the operational root boundary", encoding="utf-8")
+    (operational_root / "HANDOFF_ESCAPE.md").symlink_to(outside)
+
+    settings = default_settings(str(git_repo))
+    settings.project.operational_roots = [str(operational_root)]
+    scanner = ForensicsScanner(settings, tmp_path / "mission")
+    report = scanner.scan(include_sessions=False)
+    markdown = Path(report["markdown_path"]).read_text(encoding="utf-8")
+
+    assert any(
+        item["configured"] == str(operational_root) and item["available"]
+        for item in report["working_roots"]
+    )
+    assert any(
+        item["path"].endswith("HANDOFF_SOL.md")
+        and "operational root" in item["excerpt"]
+        for item in report["backlog_files"]
+    )
+    assert any(
+        item["path"].endswith(".sol-link/watch-state.json")
+        and "17" in item["content"]
+        for item in report["watcher_state"]
+    )
+    assert "unrelated.txt" not in markdown
+    assert "HANDOFF_INTERNAL.md" not in markdown
+    assert "HANDOFF_ESCAPE.md" not in markdown
+    assert str(operational_root) in markdown
+
+
 def test_forensics_writes_dossier_and_filters_protected_untracked(git_repo: Path, tmp_path: Path) -> None:
     (git_repo / "BACKLOG.md").write_text("- continue recovery\n", encoding="utf-8")
     (git_repo / ".env").write_text("PASSWORD=abcdefghijklmnop\n", encoding="utf-8")

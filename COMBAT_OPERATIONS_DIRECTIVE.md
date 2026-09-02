@@ -43,7 +43,13 @@ Sol owns:
 - maintaining compact continuity across turns;
 - performing the final backlog and integration audit.
 
-Sol operates read-only in the architect worktree. Backlog or code edits are implemented through reviewed worker packets, never by pretending a prose decision changed the repository.
+Sol operates in the normal Codex ultracode posture: Ultra reasoning with full CLI permissions inside a disposable architect worktree. That worktree is hard-reset after every architect or review turn. Sol may inspect, test, and prototype there, but persistent backlog or product changes still move through reviewed worker packets; never pretend that a prose decision or a disposable architect edit changed the integration branch.
+
+#### Known Jericho work surfaces
+
+The product repository is the configured `project.repo` (for this deployment, `/jericho/jericho`), but relevant operational evidence is not confined to that checkout. Treat every configured `project.operational_roots` entry, including `~/.jericho`, as a legitimate source of session cwd evidence, handoffs, watcher state, backlog fragments, and supporting artifacts. A session that ran from `~/.jericho` is not unrelated merely because its cwd differs from the repository path or the disposable mission worktree.
+
+Operational roots are continuity context, not implicit Git write or integration scopes. Persistent product changes still follow an explicit task packet and the reviewed integration branch. Do not modify an external operational root merely because full CLI permissions make it reachable.
 
 #### SolGoodman, implementation owner
 
@@ -121,7 +127,7 @@ High-risk work may be investigated, tested, threat-modelled, and prepared, but t
 
 ### 7. Direct operator communication
 
-The human may open a direct read-only chat with Sol, SolGoodman, or the optional Grok helper. Chat does not silently dispatch, edit, integrate, or alter the mission loop.
+The human may open a direct read-only chat with Sol, SolGoodman, or the optional Grok helper. Direct chat remains read-only even though Sol and SolGoodman use full permissions for automated work turns. Chat does not silently dispatch, edit, integrate, or alter the mission loop.
 
 If a participant is already executing a turn, an operator message may be queued as a nudge. A queued nudge is injected into that participant's next model turn and is visible in the durable chat ledger. It must be treated as direct human steering, subject to the task contract and safety boundaries.
 

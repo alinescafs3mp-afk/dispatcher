@@ -6,7 +6,8 @@ port = 8787
 open_browser = true
 
 [project]
-repo = "/absolute/path/to/friday"
+repo = "/jericho/jericho"
+operational_roots = ["~/.jericho"]
 backlog_globs = ["BACKLOG*.md", "**/BACKLOG*.md", "TODO*.md", "**/TODO*.md", "ROADMAP*.md", "**/ROADMAP*.md", "HANDOFF*.md", "**/HANDOFF*.md", "outer_sol/**/*.md", "handoffs/**/*.md", ".sol-link/**/*.md"]
 validation_commands = []
 protected_paths = [".git/**", ".env", ".env.*", "**/*.pem", "**/*.key", "**/*.token"]
@@ -16,11 +17,15 @@ session_search_roots = ["~/.codex/sessions", "~/.config/codex-multi/profiles/*/s
 [profiles]
 default = "reserve"
 combat_grok_enabled = false
+reserve_luna_effort = "max"
+reserve_luna_full_access = true
 # Empty model names let the authenticated codex wrappers select their normal model.
 combat_sol_model = ""
-combat_sol_effort = "max"
+combat_sol_effort = "ultra"
+combat_sol_full_access = true
 combat_goodman_model = ""
-combat_goodman_effort = "max"
+combat_goodman_effort = "ultra"
+combat_goodman_full_access = true
 combat_grok_model = "grok-4.6"
 combat_grok_effort = "xhigh"
 
@@ -90,4 +95,4 @@ extra_args = []
 quota_command = []
 inherit_previous_session = true
 enabled = true
-unsafe_full_access = false
+unsafe_full_access = true

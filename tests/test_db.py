@@ -53,7 +53,12 @@ def test_preferences_and_snapshot(tmp_path: Path) -> None:
         assert db.get_preference("agent.grok.effort") == "xhigh"
         assert db.get_preference("missing", "fallback") == "fallback"
         db.upsert_agent("grok", "architect", "idle", metadata={"effort": "xhigh"})
+        assert db.latest_event_seq() == 0
+        event_seq = db.add_event("test", "ui", "state.changed", {"ok": True})
         snap = db.snapshot()
         assert snap["agents"][0]["metadata"]["effort"] == "xhigh"
+        assert snap["event_seq"] == event_seq
+        assert snap["state_revision"] == event_seq
+        assert db.latest_event_seq() == event_seq
     finally:
         db.close()

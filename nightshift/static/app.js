@@ -2,18 +2,19 @@ const $ = (sel, root=document) => root.querySelector(sel);
 const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
 const LOGICAL_KEYS = ['grok', 'luna', 'spark'];
 const REFRESH_DELAY_MS = 120;
+const SOCKET_STALE_MS = 40000;
+const SOCKET_WATCH_INTERVAL_MS = 5000;
 let state = null;
 let refreshTimer = null;
 let refreshPromise = null;
 let refreshPending = false;
 let stateClock = 0;
 let appliedClock = 0;
+let lastEventSeq = 0;
 let reconnectDelay = 1000;
-let socket = null;
 let reconnectTimer = null;
+let activeSocket = null;
 let lastSocketActivity = 0;
-let lastAppliedEventSeq = 0;
-let highestObservedEventSeq = 0;
 let profileRequestActive = false;
 const logFloors = {};
 
@@ -72,13 +73,20 @@ function missionTasks() {
 }
 
 function applyState(next, clock) {
-  if (clock < appliedClock) return;
+  if (clock < appliedClock) return false;
+  const watermark = Number(next?.event_seq ?? next?.state_revision ?? 0);
+  const safeWatermark = Number.isFinite(watermark) ? Math.max(0, watermark) : 0;
+  // A WebSocket event can overtake an older HTTP snapshot. Never roll the
+  // dashboard backwards; immediately request a fresh authoritative snapshot.
+  if (state && safeWatermark < lastEventSeq) {
+    scheduleRefresh(0);
+    return false;
+  }
   appliedClock = clock;
-  lastAppliedEventSeq = Number(next?.event_seq || 0);
-  highestObservedEventSeq = Math.max(highestObservedEventSeq, lastAppliedEventSeq);
+  lastEventSeq = Math.max(lastEventSeq, safeWatermark);
   state = next;
   render();
-  if (highestObservedEventSeq > lastAppliedEventSeq) scheduleRefresh(0);
+  return true;
 }
 
 function renderProfile() {
@@ -87,7 +95,7 @@ function renderProfile() {
   $('#profileEyebrow').textContent = `SOL LINK / ${current.eyebrow || 'OPERATIONS'}`;
   $('#profileWord').textContent = current.id === 'combat' ? 'combat' : 'reserve';
   $('#profileDescription').textContent = current.description || '';
-  $('#profileBadge').textContent = current.id === 'combat' ? 'БОЙ' : 'РЕЗЕРВ';
+  $('#profileBadge').textContent = current.short_label || current.id || 'profile';
   $('#profileBadge').className = `badge ${current.id === 'combat' ? 'combat' : 'reserve'}`;
   $('#directiveLink').href = `/api/directive/${encodeURIComponent(current.id || 'reserve')}`;
 
@@ -191,6 +199,14 @@ function renderAgents() {
     const optional = $('[data-role="optional"]', card);
     optional.hidden = !spec.optional;
     optional.textContent = enabled ? 'optional · enabled' : 'optional · disabled';
+
+    const access = $('[data-role="access"]', card);
+    const fullAccess = Boolean(spec.unsafe_full_access);
+    access.textContent = fullAccess ? 'full access' : 'sandboxed';
+    access.className = `badge ${fullAccess ? 'full-access' : 'sandboxed'}`;
+    access.title = fullAccess
+      ? 'Implementation and automated architect turns may bypass the Codex sandbox. Direct chats remain read-only.'
+      : 'This participant stays inside its configured CLI sandbox.';
 
     const messageButton = $('[data-role="message-agent"]', card);
     messageButton.disabled = !enabled;
@@ -431,10 +447,6 @@ async function decide(id, approved) {
 
 async function switchProfile(profileId, combatGrokEnabled) {
   if (profileRequestActive || state?.profile_switch_locked) return;
-  const current = profile();
-  const sameHelperSetting = profileId !== 'combat'
-    || Boolean(combatGrokEnabled) === Boolean(current.combat_grok_enabled);
-  if (current.id === profileId && sameHelperSetting) return;
   profileRequestActive = true;
   renderProfile();
   try {
@@ -489,12 +501,12 @@ $('#chatForm').onsubmit = async event => {
   const delivery = $('#chatDelivery').value;
   input.value = '';
   const result = await requestAction('/api/chat', {
-    body: {text, recipient: `slot:${recipient}`, delivery},
+    body: {text, recipient, delivery},
   });
   if (!result) {
     input.value = text;
   } else if (result.status === 'queued') {
-    toast(`${result.display_name}: nudge queued for the next turn.`);
+    toast(`${result.display_name}: nudge queued for the next work turn.`);
   }
 };
 
@@ -544,39 +556,23 @@ $$('[data-role="effort"]').forEach(select => {
   };
 });
 
-function scheduleReconnect() {
-  if (reconnectTimer || !navigator.onLine) return;
-  const jitter = Math.round(reconnectDelay * (0.8 + Math.random() * 0.4));
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connect();
-  }, jitter);
-  reconnectDelay = Math.min(15000, Math.round(reconnectDelay * 1.7));
-}
-
 function connect() {
-  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+  if (activeSocket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(activeSocket.readyState)) {
     return;
-  }
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
   }
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${protocol}://${location.host}/ws`);
-  socket = ws;
-  lastSocketActivity = Date.now();
+  activeSocket = ws;
   ws.onopen = () => {
-    if (socket !== ws) return;
+    if (activeSocket !== ws) return;
     reconnectDelay = 1000;
     lastSocketActivity = Date.now();
     const badge = $('#socketBadge');
     badge.textContent = 'Sol Link live';
     badge.className = 'badge good';
-    scheduleRefresh(0);
   };
   ws.onmessage = event => {
-    if (socket !== ws) return;
+    if (activeSocket !== ws) return;
     lastSocketActivity = Date.now();
     try {
       const message = JSON.parse(event.data);
@@ -584,59 +580,63 @@ function connect() {
         applyState(message.payload, ++stateClock);
         return;
       }
+      const sequence = Number(message.seq || 0);
       if (message.type === 'system.heartbeat') {
-        const serverSeq = Number(message.payload?.event_seq || 0);
-        highestObservedEventSeq = Math.max(highestObservedEventSeq, serverSeq);
-        if (serverSeq > lastAppliedEventSeq) scheduleRefresh(0);
+        if (Number.isFinite(sequence) && sequence > lastEventSeq) {
+          scheduleRefresh(0);
+        }
         return;
       }
-      const eventSeq = Number(message.seq || 0);
-      if (
-        eventSeq
-        && highestObservedEventSeq
-        && eventSeq > highestObservedEventSeq + 1
-      ) {
-        scheduleRefresh(0);
-      } else if (eventSeq > lastAppliedEventSeq) {
+      if (!Number.isFinite(sequence) || sequence <= 0) {
         scheduleRefresh();
+        return;
       }
-      highestObservedEventSeq = Math.max(highestObservedEventSeq, eventSeq);
-    } catch (_) {}
+      if (sequence <= lastEventSeq) return;
+      const gapDetected = lastEventSeq > 0 && sequence > lastEventSeq + 1;
+      lastEventSeq = sequence;
+      scheduleRefresh(gapDetected ? 0 : REFRESH_DELAY_MS);
+    } catch (_) {
+      scheduleRefresh(0);
+    }
   };
   ws.onclose = () => {
-    if (socket !== ws) return;
-    socket = null;
+    if (activeSocket !== ws) return;
+    activeSocket = null;
     const badge = $('#socketBadge');
     badge.textContent = 'reconnecting';
     badge.className = 'badge bad';
-    scheduleReconnect();
+    if (reconnectTimer !== null) return;
+    const jitter = 0.8 + Math.random() * 0.4;
+    const delay = Math.max(250, Math.round(reconnectDelay * jitter));
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+    reconnectDelay = Math.min(15000, Math.round(reconnectDelay * 1.7));
   };
   ws.onerror = () => ws.close();
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) {
-    scheduleRefresh(0);
-    connect();
-  }
+  if (document.hidden) return;
+  scheduleRefresh(0);
+  if (!activeSocket || activeSocket.readyState >= WebSocket.CLOSING) connect();
 });
 window.addEventListener('online', () => {
   scheduleRefresh(0);
   connect();
 });
-window.addEventListener('offline', () => {
-  const badge = $('#socketBadge');
-  badge.textContent = 'offline';
-  badge.className = 'badge bad';
-});
 setInterval(() => {
-  if (
-    socket?.readyState === WebSocket.OPEN
-    && Date.now() - lastSocketActivity > 45000
-  ) {
-    socket.close(4000, 'stale websocket');
-  }
-}, 15000);
+  const ws = activeSocket;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (Date.now() - lastSocketActivity <= SOCKET_STALE_MS) return;
+  const badge = $('#socketBadge');
+  badge.textContent = 'link stale';
+  badge.className = 'badge bad';
+  ws.close(4000, 'heartbeat timeout');
+}, SOCKET_WATCH_INTERVAL_MS);
 refresh();
 connect();
+// Authoritative polling is only a safety net for suspended tabs, proxies, and
+// operating-system sleep. Normal updates arrive through WebSocket notifications.
 setInterval(() => scheduleRefresh(0), 10000);

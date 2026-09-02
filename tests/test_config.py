@@ -11,14 +11,20 @@ def test_default_subscription_wiring() -> None:
     assert settings.agent("spark").model == "gpt-5.3-codex-spark"
     assert settings.agent("luna").binary_candidates == ["codex-solgoodman"]
     assert settings.agent("luna").model == "gpt-5.6-luna"
+    assert settings.agent("luna").unsafe_full_access is True
     assert settings.agent("grok").model == "grok-4.6"
+    assert settings.project.operational_roots == ["~/.jericho"]
 
 
 def test_default_reasoning_menus() -> None:
     settings = default_settings()
     assert settings.agent("grok").effort == "xhigh"
     assert "xhigh" in settings.agent("spark").effort_options
+    assert settings.agent("luna").effort == "max"
     assert settings.agent("luna").effort_options[-1] == "max"
+    assert settings.profiles.reserve_luna_effort == "max"
+    assert settings.profiles.combat_sol_effort == "ultra"
+    assert settings.profiles.combat_goodman_effort == "ultra"
 
 
 def test_render_example_round_trip(tmp_path: Path) -> None:
@@ -28,9 +34,29 @@ def test_render_example_round_trip(tmp_path: Path) -> None:
     assert settings.project.repo == str(tmp_path / "friday")
     assert settings.agent("grok").scrub_sensitive_env is True
     assert settings.agent("spark").inherit_previous_session is True
-    assert settings.profiles.default == "reserve"
-    assert settings.profiles.combat_grok_enabled is False
-    assert settings.profiles.combat_sol_model == ""
+    assert settings.profiles.reserve_luna_effort == "max"
+    assert settings.profiles.reserve_luna_full_access is True
+    assert settings.profiles.combat_sol_full_access is True
+    assert settings.profiles.combat_goodman_full_access is True
+    assert settings.project.operational_roots == ["~/.jericho"]
+
+
+def test_operational_roots_expand_and_deduplicate(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    support = tmp_path / "support"
+    settings = default_settings(str(repo))
+    settings.project.operational_roots = [
+        str(support),
+        str(repo),
+        str(support),
+        "",
+    ]
+
+    assert settings.project.operational_root_entries == [(str(support), support.resolve())]
+    assert settings.project.known_working_paths == [repo.resolve(), support.resolve()]
+    public = settings.public_dict()["project"]
+    assert public["operational_roots"] == settings.project.operational_roots
+    assert public["known_working_paths"] == [str(repo.resolve()), str(support.resolve())]
 
 
 def test_sanitized_child_env_removes_credentials(monkeypatch) -> None:

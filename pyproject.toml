@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sol-link-nightshift"
 version = "0.3.0"
-description = "Profile-aware subscription-backed orchestrator for Sol, SolGoodman, Grok, Luna, and Spark"
+description = "Subscription-backed combat and reserve orchestrator for Sol, SolGoodman, Grok, Luna, and Spark"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"

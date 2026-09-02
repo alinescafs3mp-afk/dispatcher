@@ -2,51 +2,67 @@
 
 ## Threat model
 
-Sol Link Dispatcher assumes the target repository and model output may contain mistakes. It does **not** assume a deliberately hostile repository is safe to execute on the same Unix account as personal credentials.
+Sol Link Dispatcher assumes that the target repository and model output may contain mistakes. It does **not** assume that a deliberately hostile repository is safe to execute under the same Unix account as personal credentials.
 
-The default design reduces blast radius with:
+The design reduces blast radius with:
 
 - separate integration, architect and worker worktrees;
-- no direct edits to the source checkout;
-- read-only architect and direct-chat turns in both operating profiles;
-- sandboxed Codex and Grok worker turns;
-- no provider API keys in configuration;
+- no direct model edits to the source checkout;
+- subscription CLIs instead of provider API keys in configuration;
 - removal of credential-shaped environment variables from child processes;
 - protected path filters and pre-commit secret-shaped content scanning;
 - shell-free validation command execution;
-- deterministic scope/risk gates before model review;
-- manual approval for high and critical risk.
+- deterministic scope and risk gates before model review;
+- manual approval for high and critical risk;
+- read-only direct operator chats, even for participants whose work turns have full access.
 
 These controls are not an OS security boundary.
 
+Configured `project.operational_roots` may point into the operator's home directory, for example `~/.jericho`. Forensics does not crawl those roots indiscriminately: it reads only configured backlog/handoff and watcher-state patterns, rejects paths that escape through symlinks, applies protected-path filters, and redacts captured text. Declaring a root does not grant it implicit write or Git-integration authority.
+
+## Operating profiles and full access
+
+The requested defaults intentionally differ by profile:
+
+- **Combat Sol** (`codex`): Ultra reasoning and Codex sandbox bypass for automated architect/review turns.
+- **Combat SolGoodman** (`codex-solgoodman`): Ultra reasoning and Codex sandbox bypass for implementation turns.
+- **Reserve Luna** (`codex-solgoodman`): Max reasoning and Codex sandbox bypass for implementation turns.
+- **Reserve Spark**: `workspace-write` sandbox.
+- **Reserve Grok architect**: read-only sandbox.
+- **Optional combat Grok helper**: Grok workspace sandbox for implementation; direct chat remains read-only.
+
+Combat Sol runs inside a disposable architect worktree that is hard-reset after every turn. Persistent product changes still require a worker diff, validation, architect review and integration. This is damage reduction, not containment: a full-access process can read or alter files reachable by the OS user and can run arbitrary commands permitted to that user.
+
+For a trusted personal Friday checkout these defaults match the intended operating posture. For any unknown, hostile or externally supplied repository, override all `*_full_access` settings to `false` and keep every `unsafe_full_access` agent setting false.
+
 ## Recommended deployment
 
-For a trusted personal project, run on loopback under your normal account after reviewing `nightshift.toml`.
+For a trusted personal project, bind to loopback, review `nightshift.toml`, and inspect the integration branch before merging.
 
 For an unknown or hostile repository:
 
 1. create a dedicated Unix user, container or VM;
-2. mount only the target repository and required CLI auth homes;
-3. do not expose SSH, cloud, browser, GitHub or password-manager credentials;
-4. disable network access outside provider endpoints where practical;
-5. keep `unsafe_full_access = false`;
-6. inspect the integration branch before merging or pushing.
+2. mount only the target repository and the minimum required CLI auth homes;
+3. disable `reserve_luna_full_access`, `combat_sol_full_access` and `combat_goodman_full_access`;
+4. do not expose SSH, cloud, browser, GitHub or password-manager credentials;
+5. disable network access outside required provider endpoints where practical;
+6. inspect the integration branch and validation evidence before any merge or push.
 
 ## Dashboard exposure
 
-The dashboard has no authentication. Defaults bind to `127.0.0.1`. Browser-originated state-changing HTTP requests and WebSocket connections are restricted to the dashboard origin as defence in depth, but this is not a substitute for authentication. Do not bind it to `0.0.0.0`, a LAN address or a public interface without placing it behind authenticated TLS termination.
+The dashboard has no user authentication. It binds to `127.0.0.1` by default. Browser-originated state-changing HTTP requests and WebSocket connections are restricted to the dashboard origin as defence in depth, but this does not replace authentication. Do not bind it to `0.0.0.0`, a LAN address or a public interface without authenticated TLS termination.
 
 ## Subscription credentials
 
-Dispatcher uses the CLIs' existing local login state. It does not print, persist or intentionally read bearer token values. It strips common API-key variables so commands do not silently switch to metered API billing.
+Dispatcher uses each CLI's existing local login state. It does not intentionally extract, print or persist bearer-token values. Common API-key variables are stripped so commands do not silently switch from a consumer subscription to metered API billing.
 
-The CLI processes still need access to their own auth stores. Anyone who controls the same OS account may already be able to use those subscriptions, independently of Dispatcher.
+The CLI processes still need access to their own auth stores. Anyone controlling the same OS account may already be able to use those subscriptions independently of Dispatcher.
 
-## Profiles and direct messages
+## Direct lines and durable nudges
 
-Changing the operating profile rewires logical participants to different physical CLI accounts. Dispatcher serializes profile changes against model turns, mission setup, quota probes and doctor probes. Every mission records its profile and restores it during resume.
+A direct chat model turn is always read-only and cannot silently dispatch or integrate work. A queued nudge is stored in SQLite and attached to the participant's next work turn. It is marked delivered after a successful result or other provider-side evidence (events or a final response). A failure before any such evidence leaves the nudge queued for retry.
 
-Direct participant chat is read-only. Queued nudges are stored in SQLite and appended to a participant's next eligible prompt. They remain subject to the active task packet, stop conditions and deterministic safety boundaries. Do not treat chat as an authorization channel for bypassing a human gate or enabling `unsafe_full_access`.
+Do not put passwords, tokens or private-key material into chat or nudges. Redaction is defence in depth and cannot recognize every custom credential format.
 
 ## Secret detection limitations
 

@@ -87,9 +87,9 @@ class TaskPacket(BaseModel):
     context: str = ""
     source_ref: str = ""
     architectural_intent: str = ""
-    allowed_paths: list[str] = Field(default_factory=list, min_length=1, max_length=64)
+    allowed_paths: list[str] = Field(min_length=1, max_length=64)
     forbidden_paths: list[str] = Field(default_factory=list, max_length=64)
-    acceptance_criteria: list[str] = Field(default_factory=list, min_length=1, max_length=64)
+    acceptance_criteria: list[str] = Field(min_length=1, max_length=64)
     validation_commands: list[str] = Field(default_factory=list, max_length=32)
     stop_conditions: list[str] = Field(default_factory=list, max_length=32)
     risk: RiskLevel = RiskLevel.LOW

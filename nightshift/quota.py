@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from . import __version__
 from .config import AgentConfig
 from .models import QuotaSnapshot, QuotaWindow
 from .process import SUBPROCESS_STREAM_LIMIT, ProcessRunner
@@ -124,7 +125,7 @@ async def _read_codex_account_once(command: list[str], cwd: Path, timeout: int,
                 "clientInfo": {
                     "name": "sol_link_nightshift",
                     "title": "Sol Link Dispatcher",
-                    "version": "0.3.0",
+                    "version": __version__,
                 },
                 "capabilities": {"experimentalApi": True},
             },
@@ -403,7 +404,7 @@ async def _read_grok_billing_once(command: list[str], cwd: Path, timeout: int,
             "clientInfo": {
                 "name": "sol_link_nightshift",
                 "title": "Sol Link Dispatcher",
-                "version": "0.3.0",
+                "version": __version__,
             },
         })
         initialized = await receive(1)

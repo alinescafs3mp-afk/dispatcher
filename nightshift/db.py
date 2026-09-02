@@ -420,6 +420,29 @@ class StateDB:
             (utc_now(), *seqs),
         )
 
+    def expire_mission_nudges(self, profile: str, mission_id: str) -> list[int]:
+        """Resolve undeliverable nudges when a terminal mission has no next turn."""
+        if not mission_id:
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT seq FROM chat
+                   WHERE role='user' AND kind='nudge' AND status='queued'
+                     AND profile=? AND mission_id=?
+                   ORDER BY seq""",
+                (profile, mission_id),
+            ).fetchall()
+            seqs = [int(row["seq"]) for row in rows]
+            if seqs:
+                placeholders = ",".join("?" for _ in seqs)
+                self._conn.execute(
+                    f"UPDATE chat SET status='expired', delivered_at=? "
+                    f"WHERE seq IN ({placeholders})",
+                    (utc_now(), *seqs),
+                )
+                self._conn.commit()
+        return seqs
+
     def set_preference(self, key: str, value: Any) -> None:
         self.execute(
             """INSERT INTO preferences(key,value_json,updated_at) VALUES(?,?,?)
@@ -453,30 +476,56 @@ class StateDB:
         )
 
     def latest_event_seq(self) -> int:
-        rows = self.query("SELECT COALESCE(MAX(seq), 0) AS seq FROM events")
-        return int(rows[0]["seq"]) if rows else 0
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS seq FROM events"
+            ).fetchone()
+        return int(row["seq"] if row is not None else 0)
 
     def snapshot(self, log_tail: int = 500) -> dict[str, Any]:
-        missions = self.query("SELECT * FROM missions ORDER BY created_at DESC LIMIT 20")
-        tasks = self.query("SELECT * FROM tasks ORDER BY created_at DESC LIMIT 500")
-        agents = self.query("SELECT * FROM agents ORDER BY id")
-        chat = self.query("SELECT * FROM chat ORDER BY seq DESC LIMIT 500")
-        chat.reverse()
-        usage = self.query(
-            """SELECT agent_id, SUM(input_tokens) input_tokens,
-                      SUM(cached_input_tokens) cached_input_tokens,
-                      SUM(output_tokens) output_tokens,
-                      SUM(reasoning_tokens) reasoning_tokens
-               FROM usage GROUP BY agent_id"""
-        )
-        logs: dict[str, list[dict[str, Any]]] = {}
-        for agent in agents:
-            rows = self.query(
-                "SELECT * FROM logs WHERE agent_id=? ORDER BY seq DESC LIMIT ?",
-                (agent["id"], log_tail),
+        """Return one coherent dashboard snapshot plus its event watermark.
+
+        Holding the process-local database lock across all reads prevents the UI
+        from receiving a mission row from one instant and tasks/logs from a later
+        instant. ``event_seq`` is the authoritative watermark used by the browser
+        to ignore duplicate notifications and detect dropped WebSocket events.
+        """
+        with self._lock:
+            def rows(sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+                return [
+                    dict(row)
+                    for row in self._conn.execute(sql, params).fetchall()
+                ]
+
+            missions = rows(
+                "SELECT * FROM missions ORDER BY created_at DESC LIMIT 20"
             )
-            rows.reverse()
-            logs[agent["id"]] = rows
+            tasks = rows(
+                "SELECT * FROM tasks ORDER BY created_at DESC LIMIT 500"
+            )
+            agents = rows("SELECT * FROM agents ORDER BY id")
+            chat = rows("SELECT * FROM chat ORDER BY seq DESC LIMIT 500")
+            chat.reverse()
+            usage = rows(
+                """SELECT agent_id, SUM(input_tokens) input_tokens,
+                          SUM(cached_input_tokens) cached_input_tokens,
+                          SUM(output_tokens) output_tokens,
+                          SUM(reasoning_tokens) reasoning_tokens
+                   FROM usage GROUP BY agent_id"""
+            )
+            logs: dict[str, list[dict[str, Any]]] = {}
+            for agent in agents:
+                agent_logs = rows(
+                    "SELECT * FROM logs WHERE agent_id=? ORDER BY seq DESC LIMIT ?",
+                    (agent["id"], log_tail),
+                )
+                agent_logs.reverse()
+                logs[agent["id"]] = agent_logs
+            watermark = self._conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) AS seq FROM events"
+            ).fetchone()
+            event_seq = int(watermark["seq"] if watermark is not None else 0)
+
         for row in missions:
             try:
                 row["profile_options"] = json.loads(
@@ -496,11 +545,12 @@ class StateDB:
             except json.JSONDecodeError:
                 agent["metadata"] = {}
         return {
+            "event_seq": event_seq,
+            "state_revision": event_seq,
             "missions": missions,
             "tasks": tasks,
             "agents": agents,
             "chat": chat,
             "usage": usage,
             "logs": logs,
-            "event_seq": self.latest_event_seq(),
         }

@@ -106,9 +106,9 @@ class OrchestratorError(RuntimeError):
 
 class NightshiftOrchestrator:
     def __init__(self, settings: Settings) -> None:
-        # Profile resolution rewrites the logical agent map. Keep the caller's
-        # Settings object immutable so multiple orchestrators created from the
-        # same fixture/config cannot inherit each other's active profile.
+        # Resolving a profile rewrites the logical agent map. Keep the caller's
+        # Settings object immutable so multiple app/test instances cannot leak
+        # an active profile into one another.
         self.settings = deepcopy(settings)
         self.runtime = self.settings.orchestrator.runtime_path
         self.runtime.mkdir(parents=True, exist_ok=True)
@@ -194,7 +194,12 @@ class NightshiftOrchestrator:
         )
 
     def _profile_context(self) -> str:
-        return profile_prompt_context(self.profile, self.settings.agents)
+        return profile_prompt_context(
+            self.profile,
+            self.settings.agents,
+            repository=str(self.settings.project.repo_path),
+            operational_roots=self.settings.project.operational_roots,
+        )
 
     def _requested_combat_grok(self, value: bool | None) -> bool:
         return self.combat_grok_enabled if value is None else bool(value)
@@ -231,10 +236,11 @@ class NightshiftOrchestrator:
         persist: bool,
     ) -> dict[str, Any]:
         """Activate a profile while the caller owns ``_profile_lock``."""
-        acquired: list[asyncio.Lock] = []
         async with self._doctor_lock, self._quota_lock:
             acquired = await self._acquire_all_agent_locks()
             try:
+                # Resolve and construct the replacement wiring before mutating the
+                # active state. A bad profile cannot leave a half-switched control room.
                 new_agents = resolve_profile_agents(
                     self._agent_templates,
                     self.settings.profiles,
@@ -303,16 +309,24 @@ class NightshiftOrchestrator:
         value = recipient.strip().casefold()
         if not value or value == "architect":
             return self.profile.architect_key
+        # Explicit slot/key aliases always address the stable logical contract.
         for prefix in ("slot:", "key:"):
             if value.startswith(prefix):
                 key = value.removeprefix(prefix)
                 if key in self.settings.agents:
                     return key
                 raise OrchestratorError(f"Unknown chat recipient: {recipient}")
+        # Public API and browser controls use stable logical lane keys. Resolve
+        # those before physical aliases, because combat maps physical Codex/Sol
+        # onto logical `grok` and physical Grok onto logical `spark`.
+        logical_keys = {key.casefold(): key for key in self.settings.agents}
+        if value in logical_keys:
+            return logical_keys[value]
         for key, config in self.settings.agents.items():
             candidates = {
                 config.id.casefold(),
                 config.display_name.casefold(),
+                config.physical_key.casefold(),
             }
             candidates.update(item.casefold() for item in config.binary_candidates)
             if value in candidates:
@@ -321,33 +335,53 @@ class NightshiftOrchestrator:
             "primary": self.profile.primary_worker_key,
             "goodman": "luna",
             "solgoodman": "luna",
+            "sol": self.profile.architect_key,
             "helper": "spark",
             "assistant": "spark",
             "grok-helper": "spark",
         }
-        if self.profile_id == "combat":
-            aliases.update(
-                {
-                    "sol": self.profile.architect_key,
-                    "grok": "spark",
-                }
-            )
         key = aliases.get(value)
         if key in self.settings.agents:
             return key
-        if value in self.settings.agents:
-            return value
         raise OrchestratorError(f"Unknown chat recipient: {recipient}")
+
+    def _operator_note_mission_id(self) -> str:
+        """Bind steering to a live/resumable mission, otherwise keep it global."""
+        row = self._mission_row()
+        if row and row.get("status") not in {
+            MissionState.COMPLETED.value,
+            MissionState.STOPPED.value,
+        }:
+            return self.mission_id
+        return ""
+
+    async def _expire_mission_nudges(self, reason: str) -> None:
+        """Mark mission-bound steering as expired when no future turn can consume it."""
+        seqs = self.db.expire_mission_nudges(self.profile_id, self.mission_id)
+        if not seqs:
+            return
+        await self._emit(
+            "chat.nudges_expired",
+            {
+                "profile": self.profile_id,
+                "mission_id": self.mission_id,
+                "seqs": seqs,
+                "reason": reason,
+            },
+            sender="nightshift",
+            recipient="human",
+        )
 
     async def _queue_operator_nudge(self, key: str, text: str) -> dict[str, Any]:
         config = self.settings.agent(key)
+        note_mission_id = self._operator_note_mission_id()
         seq = self.db.add_chat(
             "user",
             text,
             agent_key=key,
             agent_id=config.id,
             profile=self.profile_id,
-            mission_id=self.mission_id,
+            mission_id=note_mission_id,
             kind="nudge",
             status="queued",
         )
@@ -357,6 +391,7 @@ class NightshiftOrchestrator:
             "agent_id": config.id,
             "display_name": config.display_name,
             "seq": seq,
+            "mission_id": note_mission_id,
             "message": "Queued for the participant's next model turn",
         }
         await self._emit(
@@ -367,17 +402,14 @@ class NightshiftOrchestrator:
         )
         return payload
 
-    def _prepare_operator_notes(
-        self,
-        key: str,
-        prompt: str,
-        *,
-        profile_id: str | None = None,
-        mission_id: str | None = None,
-    ) -> tuple[str, list[int]]:
-        profile = self.profile_id if profile_id is None else profile_id
-        mission = self.mission_id if mission_id is None else mission_id
-        notes = self.db.pending_nudges(profile, key, mission)
+    def _prepare_operator_notes(self, key: str, prompt: str) -> tuple[str, list[int]]:
+        """Attach queued steering without acknowledging it before the model returns.
+
+        A process can fail after stdin has been prepared but before the provider accepts
+        the turn. Keeping rows queued until provider-side evidence appears gives the
+        operator at-least-once delivery instead of silently dropping an intervention.
+        """
+        notes = self.db.pending_nudges(self.profile_id, key, self.mission_id)
         if not notes:
             return prompt, []
         seqs = [int(note["seq"]) for note in notes]
@@ -386,32 +418,43 @@ class NightshiftOrchestrator:
         )
         return prompt + block, seqs
 
-    async def _ack_operator_notes(
+    async def _settle_operator_notes(
         self,
         key: str,
         seqs: list[int],
-        *,
-        profile_id: str | None = None,
-        mission_id: str | None = None,
+        result: AgentResult,
     ) -> None:
         if not seqs:
             return
-        profile = self.profile_id if profile_id is None else profile_id
-        mission = self.mission_id if mission_id is None else mission_id
-        self.db.mark_chat_delivered(seqs)
+        config = self.settings.agent(key)
+        final_text = result.final_text.strip()
+        delivered = result.ok or result.raw_events > 0 or bool(final_text)
+        if delivered:
+            if result.ok:
+                evidence = "successful result"
+            elif final_text:
+                evidence = "provider final response"
+            else:
+                evidence = "provider event stream"
+            self.db.mark_chat_delivered(seqs)
+            await self._emit(
+                "chat.nudges_delivered",
+                {"recipient": key, "seqs": seqs, "evidence": evidence},
+                sender="human",
+                recipient=config.id,
+            )
+            return
         await self._emit(
-            "chat.nudges_delivered",
-            {"recipient": key, "profile": profile, "seqs": seqs},
-            sender="human",
-            recipient=self.settings.agent(key).id,
-            mission_id=mission,
+            "chat.nudges_deferred",
+            {
+                "recipient": key,
+                "seqs": seqs,
+                "limit_detected": result.limit_detected,
+                "error": result.error,
+            },
+            sender="nightshift",
+            recipient=config.id,
         )
-
-    async def _inject_operator_notes(self, key: str, prompt: str) -> str:
-        """Compatibility helper used by tests and one-shot internal callers."""
-        prompt, seqs = self._prepare_operator_notes(key, prompt)
-        await self._ack_operator_notes(key, seqs)
-        return prompt
 
     def _load_preferences(self) -> None:
         for key, config in self.settings.agents.items():
@@ -672,11 +715,20 @@ class NightshiftOrchestrator:
                         home = str(payload.get("codex_home") or "")
                         if home:
                             self.codex_homes[key] = home
-                        options, matched_model = codex_effort_options(
-                            payload,
-                            config.model,
-                            prefer_luna=config.physical_key == "luna",
+                        prefer_luna = (
+                            self.profile_id == "reserve"
+                            and config.physical_key == "luna"
                         )
+                        if config.model or prefer_luna:
+                            options, matched_model = codex_effort_options(
+                                payload,
+                                config.model,
+                                prefer_luna=prefer_luna,
+                            )
+                        else:
+                            # Combat Codex wrappers own their Sol model selection.
+                            # Do not label them with an arbitrary catalog default.
+                            options, matched_model = [], ""
                         if options:
                             if config.effort and config.effort not in options:
                                 options.append(config.effort)
@@ -754,29 +806,28 @@ class NightshiftOrchestrator:
             return snapshots
 
     async def set_reasoning(self, key: str, effort: str) -> dict[str, Any]:
-        effort = effort.strip().lower()
         async with self._profile_lock:
             if key not in self.settings.agents:
                 raise OrchestratorError(f"Unknown agent: {key}")
             config = self.settings.agent(key)
+            effort = effort.strip().lower()
             if effort not in config.effort_options:
                 raise OrchestratorError(
                     f"Unsupported reasoning effort for {key}: {effort}. "
                     f"Allowed: {', '.join(config.effort_options)}"
                 )
             config.effort = effort
-            profile_id = self.profile_id
             self.db.set_preference(
-                f"profile.{profile_id}.agent.{key}.effort", effort
+                f"profile.{self.profile_id}.agent.{key}.effort", effort
             )
-            if profile_id == "reserve":
+            if self.profile_id == "reserve":
                 self.db.set_preference(f"agent.{key}.effort", effort)
             self.db.update_agent(
                 config.id,
                 model=config.model,
                 metadata_json={
                     "key": key,
-                    "profile": profile_id,
+                    "profile": self.profile_id,
                     "display_name": config.display_name,
                     "lane": config.lane,
                     "physical_key": config.physical_key,
@@ -789,18 +840,32 @@ class NightshiftOrchestrator:
             )
             payload = {
                 "key": key,
-                "profile": profile_id,
+                "profile": self.profile_id,
                 "agent_id": config.id,
                 "display_name": config.display_name,
                 "effort": effort,
                 "effort_options": config.effort_options,
                 "applies": "next model turn",
             }
-        await self._emit("agent.reasoning_changed", payload, sender="human")
-        return payload
+            await self._emit("agent.reasoning_changed", payload, sender="human")
+            return payload
 
     def snapshot(self) -> dict[str, Any]:
         data = self.db.snapshot(log_tail=self.settings.orchestrator.log_tail_lines)
+        # Agent ids differ between profiles. Do not make the browser reconcile
+        # stale rows from a previously active wiring with the current cards.
+        active_agent_ids = {config.id for config in self.settings.agents.values()}
+        data["agents"] = [
+            row for row in data["agents"] if row.get("id") in active_agent_ids
+        ]
+        data["usage"] = [
+            row for row in data["usage"] if row.get("agent_id") in active_agent_ids
+        ]
+        data["logs"] = {
+            agent_id: rows
+            for agent_id, rows in data["logs"].items()
+            if agent_id in active_agent_ids
+        }
         data["quotas"] = self.quota_cache
         data["config"] = self.settings.public_dict()
         data["profile"] = self._profile_public()
@@ -876,18 +941,20 @@ class NightshiftOrchestrator:
                 )
                 self._grok_turns = 0
                 self._decision_counter = 0
+                await self._emit(
+                    "mission.created",
+                    {
+                        "mission_id": mission_id,
+                        "goal": goal,
+                        "profile": self.profile_id,
+                    },
+                )
                 self._mission_task = asyncio.create_task(
                     self._run_new_mission(mission_id, goal)
                 )
-                profile_id = self.profile_id
+                return mission_id
             finally:
                 self._release_agent_locks(agent_locks)
-
-        await self._emit(
-            "mission.created",
-            {"mission_id": mission_id, "goal": goal, "profile": profile_id},
-        )
-        return mission_id
 
     async def resume_interrupted(self, mission_id: str) -> None:
         profile_payload: dict[str, Any] | None = None
@@ -909,9 +976,7 @@ class NightshiftOrchestrator:
                     f"Mission has unknown operating profile: {stored_profile}"
                 )
             try:
-                stored_options = json.loads(
-                    row.get("profile_options_json") or "{}"
-                )
+                stored_options = json.loads(row.get("profile_options_json") or "{}")
             except json.JSONDecodeError:
                 stored_options = {}
             stored_grok = bool(
@@ -921,6 +986,8 @@ class NightshiftOrchestrator:
                 )
             )
 
+            # Validate every durable path before changing the active profile. A
+            # broken old mission must not rewire the live control room as a side effect.
             try:
                 stored_repo = Path(row["repo"]).expanduser().resolve()
             except (OSError, RuntimeError) as exc:
@@ -1000,19 +1067,17 @@ class NightshiftOrchestrator:
                     (mission_id,),
                 )[0]["count"]
             )
+            if profile_payload is not None:
+                await self._emit(
+                    "profile.changed", profile_payload, sender="nightshift"
+                )
+            await self._emit(
+                "mission.resumed",
+                {"mission_id": mission_id, "profile": self.profile_id},
+            )
             self._mission_task = asyncio.create_task(
                 self._run_resumed_mission(row)
             )
-            active_profile = self.profile_id
-
-        if profile_payload is not None:
-            await self._emit(
-                "profile.changed", profile_payload, sender="nightshift"
-            )
-        await self._emit(
-            "mission.resumed",
-            {"mission_id": mission_id, "profile": active_profile},
-        )
 
     async def pause(self) -> None:
         row = self._require_running_mission("pause")
@@ -1062,6 +1127,7 @@ class NightshiftOrchestrator:
             status=MissionState.STOPPED.value,
             summary="Stopped by human operator",
         )
+        await self._expire_mission_nudges("mission stopped by human operator")
         await self._emit("mission.stopped", {"mission_id": self.mission_id})
 
     async def approve_task(self, task_id: str, approved: bool, note: str = "") -> None:
@@ -1078,53 +1144,53 @@ class NightshiftOrchestrator:
         recipient: str = "architect",
         delivery: str = "auto",
     ) -> dict[str, Any]:
-        """Talk to any active participant or queue steering for its next turn."""
+        """Talk to any active participant or queue steering for its next work turn."""
         text = text.strip()
         if not text:
             raise OrchestratorError("Message is empty")
         if delivery not in {"auto", "chat", "nudge"}:
             raise OrchestratorError(f"Unknown chat delivery mode: {delivery}")
 
-        agent_lock: asyncio.Lock | None = None
+        acquired = False
         async with self._profile_lock:
             key = self._resolve_chat_recipient(recipient)
             config = self.settings.agent(key)
             if not config.enabled:
                 raise OrchestratorError(
-                    "Participant is disabled in the active profile: "
-                    f"{config.display_name}"
+                    f"Participant is disabled in the active profile: {config.display_name}"
                 )
-            agent_lock = self.agent_locks[key]
-            if delivery == "nudge" or (
-                delivery == "auto" and agent_lock.locked()
-            ):
+            lock = self.agent_locks[key]
+            if delivery == "nudge" or (delivery == "auto" and lock.locked()):
                 return await self._queue_operator_nudge(key, text)
-            if delivery == "chat" and agent_lock.locked():
+            try:
+                await asyncio.wait_for(lock.acquire(), timeout=0.05)
+                acquired = True
+            except TimeoutError:
+                if delivery == "auto":
+                    return await self._queue_operator_nudge(key, text)
                 raise OrchestratorError(
-                    f"{config.display_name} is busy; "
-                    "use delivery='nudge' or 'auto'"
-                )
-            # No await-capable code can claim an unlocked asyncio.Lock between
-            # this check and acquire while the profile lock is held.
-            await agent_lock.acquire()
-            profile_id = self.profile_id
-            mission_id = self.mission_id
-            profile_context = self._profile_context()
-            architect_key = self.profile.architect_key
-            workspace = self.workspace
-            config_id = config.id
-            display_name = config.display_name
-            role = config.role
+                    f"{config.display_name} is busy; use delivery='nudge' or 'auto'"
+                ) from None
 
-        task_label = f"chat:{profile_id}:{key}"
+            # Capture the channel identity while profile mutation is excluded. The
+            # participant lock then prevents profile switching until both sides of
+            # the direct conversation have been persisted. Mission start performs
+            # the same lock check, so a reply cannot leak into a newly created mission.
+            chat_profile_id = self.profile_id
+            chat_mission_id = self.mission_id
+            chat_architect_key = self.profile.architect_key
+            chat_profile_context = self._profile_context()
+            chat_workspace = self.workspace
+
+        task_label = f"chat:{chat_profile_id}:{key}"
         try:
             self.db.add_chat(
                 "user",
                 text,
                 agent_key=key,
-                agent_id=config_id,
-                profile=profile_id,
-                mission_id=mission_id,
+                agent_id=config.id,
+                profile=chat_profile_id,
+                mission_id=chat_mission_id,
                 kind="message",
                 status="sent",
             )
@@ -1134,49 +1200,44 @@ class NightshiftOrchestrator:
                     "role": "user",
                     "text": text,
                     "recipient": key,
-                    "profile": profile_id,
+                    "profile": chat_profile_id,
                 },
                 sender="human",
-                recipient=config_id,
-                mission_id=mission_id,
+                recipient=config.id,
+                mission_id=chat_mission_id,
             )
             digest = (
                 self._mission_digest()
-                if mission_id
+                if chat_mission_id
                 else "No active Sol Link mission."
             )
             prompt = chat_prompt(
                 text,
-                participant_name=display_name,
-                participant_role=role,
-                profile_id=profile_id,
+                participant_name=config.display_name,
+                participant_role=config.role,
+                profile_id=chat_profile_id,
             )
-            prompt += (
-                "\n\nCurrent compact mission ledger:\n"
-                + compact_text(digest, 9000)
+            prompt += "\n\nCurrent compact mission ledger:\n" + compact_text(
+                digest, 9000
             )
-            prompt = profile_context + "\n\n" + prompt
-            prompt, nudge_seqs = self._prepare_operator_notes(
-                key,
-                prompt,
-                profile_id=profile_id,
-                mission_id=mission_id,
-            )
+            prompt = chat_profile_context + "\n\n" + prompt
+            # Direct lines are deliberately separate from operational steering.
+            # A queued nudge remains pending for the participant's next architect,
+            # review, recovery, or implementation turn and is never consumed by a
+            # read-only chat.
             cwd = self.settings.project.repo_path
-            if workspace:
-                if key == architect_key:
+            if chat_workspace:
+                if key == chat_architect_key:
                     cwd = await asyncio.to_thread(
-                        workspace.sync_architect_worktree
+                        chat_workspace.sync_architect_worktree
                     )
                 else:
-                    cwd = workspace.integration_path
-            await self._set_agent(
-                key, AgentState.PLANNING, current_task=task_label
-            )
-            session_key = (profile_id, key)
+                    cwd = chat_workspace.integration_path
+            await self._set_agent(key, AgentState.PLANNING, current_task=task_label)
+            session_key = (chat_profile_id, key)
             if session_key not in self._chat_session_ids:
                 saved = self.db.get_preference(
-                    f"chat.session.{profile_id}.{key}",
+                    f"chat.session.{chat_profile_id}.{key}",
                     "",
                 )
                 self._chat_session_ids[session_key] = (
@@ -1193,9 +1254,7 @@ class NightshiftOrchestrator:
                 )
             except asyncio.CancelledError:
                 await self._set_agent(
-                    key,
-                    AgentState.STOPPED,
-                    error="Operator chat cancelled",
+                    key, AgentState.STOPPED, error="Operator chat cancelled"
                 )
                 raise
             except Exception as exc:
@@ -1204,26 +1263,19 @@ class NightshiftOrchestrator:
                     returncode=1,
                     error=f"{type(exc).__name__}: {exc}",
                 )
-            else:
-                await self._ack_operator_notes(
-                    key,
-                    nudge_seqs,
-                    profile_id=profile_id,
-                    mission_id=mission_id,
-                )
             self._chat_session_ids[session_key] = (
                 result.session_id or self._chat_session_ids[session_key]
             )
             if self._chat_session_ids[session_key]:
                 self.db.set_preference(
-                    f"chat.session.{profile_id}.{key}",
+                    f"chat.session.{chat_profile_id}.{key}",
                     self._chat_session_ids[session_key],
                 )
             self._record_usage(key, task_label, result)
-            if workspace and key == architect_key:
+            if chat_workspace and key == chat_architect_key:
                 try:
                     await asyncio.to_thread(
-                        workspace.sync_architect_worktree
+                        chat_workspace.sync_architect_worktree
                     )
                 except Exception as exc:
                     result = result.model_copy(
@@ -1250,15 +1302,15 @@ class NightshiftOrchestrator:
             answer = redact(
                 result.final_text
                 or result.error
-                or f"{display_name} returned no text."
+                or f"{config.display_name} returned no text."
             )
             self.db.add_chat(
                 "assistant",
                 answer,
                 agent_key=key,
-                agent_id=config_id,
-                profile=profile_id,
-                mission_id=mission_id,
+                agent_id=config.id,
+                profile=chat_profile_id,
+                mission_id=chat_mission_id,
                 kind="message",
                 status="sent",
             )
@@ -1268,22 +1320,22 @@ class NightshiftOrchestrator:
                     "role": "assistant",
                     "text": answer,
                     "recipient": key,
-                    "profile": profile_id,
+                    "profile": chat_profile_id,
                 },
-                sender=config_id,
+                sender=config.id,
                 recipient="human",
-                mission_id=mission_id,
+                mission_id=chat_mission_id,
             )
             return {
                 "status": "answered",
                 "recipient": key,
-                "agent_id": config_id,
-                "display_name": display_name,
+                "agent_id": config.id,
+                "display_name": config.display_name,
                 "answer": answer,
             }
         finally:
-            assert agent_lock is not None
-            agent_lock.release()
+            if acquired:
+                lock.release()
 
     async def _run_new_mission(self, mission_id: str, goal: str) -> None:
         try:
@@ -1305,7 +1357,10 @@ class NightshiftOrchestrator:
             await self.doctor()
             await self.refresh_quotas()
             scanner = ForensicsScanner(self.settings, self.mission_dir, self.codex_homes)
-            dossier = await asyncio.to_thread(scanner.scan)
+            dossier = await asyncio.to_thread(
+                scanner.scan,
+                include_sessions=self.profile.recover_predecessors,
+            )
             self._last_dossier = dossier
             self.db.update_mission(mission_id, forensics_path=dossier["markdown_path"])
             await self._emit("mission.forensics_ready", {
@@ -1344,8 +1399,15 @@ class NightshiftOrchestrator:
             await self.doctor()
             await self.refresh_quotas()
             assert self.workspace is not None and self.mission_dir is not None
-            scanner = ForensicsScanner(self.settings, self.mission_dir / "resume-scans" / utc_now().replace(":", "-"), self.codex_homes)
-            dossier = await asyncio.to_thread(scanner.scan)
+            scanner = ForensicsScanner(
+                self.settings,
+                self.mission_dir / "resume-scans" / utc_now().replace(":", "-"),
+                self.codex_homes,
+            )
+            dossier = await asyncio.to_thread(
+                scanner.scan,
+                include_sessions=self.profile.recover_predecessors,
+            )
             self._last_dossier = dossier
             self.db.update_mission(
                 self.mission_id, status=MissionState.RUNNING.value,
@@ -1409,6 +1471,7 @@ class NightshiftOrchestrator:
                         self.mission_id, status=MissionState.COMPLETED.value,
                         summary=decision.summary,
                     )
+                    await self._expire_mission_nudges("mission completed")
                     await self._emit("mission.completed", decision.model_dump())
                     return
                 final_audit_attempted = True
@@ -1448,20 +1511,18 @@ class NightshiftOrchestrator:
                 await self._emit("recovery.session_missing", {"key": key, "predecessor": predecessor})
                 continue
             session_id = str(candidate["session_id"])
+            await self._set_agent(
+                key, AgentState.RECOVERING, current_task="predecessor-handoff"
+            )
             async with self.agent_locks[key]:
-                await self._set_agent(
+                prompt, note_seqs = self._prepare_operator_notes(
                     key,
-                    AgentState.RECOVERING,
-                    current_task="predecessor-handoff",
-                )
-                prompt = (
                     self._profile_context()
                     + "\n\n"
                     + recovery_handoff_prompt(
                         predecessor, self.settings.project.repo_path
-                    )
+                    ),
                 )
-                prompt, nudge_seqs = self._prepare_operator_notes(key, prompt)
                 try:
                     result = await self.adapters[key].run(
                         prompt,
@@ -1488,21 +1549,8 @@ class NightshiftOrchestrator:
                         session_id=session_id,
                         error=f"{type(exc).__name__}: {exc}",
                     )
-                else:
-                    await self._ack_operator_notes(key, nudge_seqs)
-                self._record_usage(key, f"recovery-{key}", result)
-                await self._set_agent(
-                    key,
-                    AgentState.IDLE
-                    if result.ok
-                    else (
-                        AgentState.LIMITED
-                        if result.limit_detected
-                        else AgentState.ERROR
-                    ),
-                    session_id=result.session_id or session_id,
-                    error=result.error,
-                )
+                await self._settle_operator_notes(key, note_seqs, result)
+            self._record_usage(key, f"recovery-{key}", result)
             if result.ok and result.final_text:
                 safe_handoff = redact(result.final_text)
                 handoffs[key] = safe_handoff
@@ -1519,6 +1567,14 @@ class NightshiftOrchestrator:
                     "key": key, "session_id": session_id, "error": result.error,
                     "limit_detected": result.limit_detected,
                 })
+            await self._set_agent(
+                key,
+                AgentState.IDLE if result.ok else (
+                    AgentState.LIMITED if result.limit_detected else AgentState.ERROR
+                ),
+                session_id=result.session_id or session_id,
+                error=result.error,
+            )
         return handoffs
 
     @staticmethod
@@ -1546,7 +1602,7 @@ class NightshiftOrchestrator:
             if self.workspace:
                 cwd = await asyncio.to_thread(self.workspace.sync_architect_worktree)
             prompt = self._profile_context() + "\n\n" + prompt
-            prompt, nudge_seqs = self._prepare_operator_notes("grok", prompt)
+            prompt, note_seqs = self._prepare_operator_notes("grok", prompt)
             state = AgentState.REVIEWING if phase.startswith("review") else AgentState.PLANNING
             await self._set_agent("grok", state, current_task=phase)
             try:
@@ -1566,8 +1622,6 @@ class NightshiftOrchestrator:
                     ok=False, returncode=1,
                     error=f"{type(exc).__name__}: {exc}",
                 )
-            else:
-                await self._ack_operator_notes("grok", nudge_seqs)
             self._grok_session_id = result.session_id or self._grok_session_id
             self._grok_turns += 1
             self._record_usage("grok", phase, result)
@@ -1579,6 +1633,7 @@ class NightshiftOrchestrator:
                         "ok": False,
                         "error": (result.error + f"\nArchitect worktree reset failed: {exc}").strip(),
                     })
+            await self._settle_operator_notes("grok", note_seqs, result)
             await self._set_agent(
                 "grok",
                 AgentState.IDLE if result.ok else (
@@ -1592,7 +1647,12 @@ class NightshiftOrchestrator:
     async def _ask_architect_decision(self, prompt: str, phase: str) -> Any:
         assert self.workspace is not None
         cwd = self.workspace.architect_path
-        result = await self._run_grok(prompt, cwd, phase, read_only=True)
+        result = await self._run_grok(
+            prompt,
+            cwd,
+            phase,
+            read_only=self.profile.architect_read_only,
+        )
         if not result.ok:
             if result.limit_detected:
                 raise OrchestratorError(
@@ -1606,11 +1666,16 @@ class NightshiftOrchestrator:
         try:
             decision = self._parse_architect_decision(result.final_text)
         except (ValueError, ValidationError) as first_error:
-            repair_prompt = f"""Your previous response could not be parsed by Sol Link Dispatcher:
+            repair_prompt = f"""Your previous response could not be parsed by Sol Link Nightshift:
 {first_error}
 
 Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object matching the standing directive. Do not add another JSON object."""
-            repair = await self._run_grok(repair_prompt, cwd, f"{phase}-repair", read_only=True)
+            repair = await self._run_grok(
+                repair_prompt,
+                cwd,
+                f"{phase}-repair",
+                read_only=self.profile.architect_read_only,
+            )
             if not repair.ok:
                 raise OrchestratorError(f"Architect output repair failed: {repair.error}") from first_error
             decision = self._parse_architect_decision(repair.final_text)
@@ -1659,17 +1724,15 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                 return
             self.db.update_task(task_id, status=(TaskState.IMPLEMENTING.value if attempt == 1 else TaskState.REVISION.value),
                                 attempt=attempt)
+            prompt = worker_prompt(
+                packet,
+                tree.base_sha,
+                revision_context,
+                profile_id=self.profile_id,
+            )
+            prompt = self._profile_context() + "\n\n" + prompt
             async with self.agent_locks[active_worker]:
-                prompt = worker_prompt(
-                    packet,
-                    tree.base_sha,
-                    revision_context,
-                    profile_id=self.profile_id,
-                )
-                prompt = self._profile_context() + "\n\n" + prompt
-                prompt, nudge_seqs = self._prepare_operator_notes(
-                    active_worker, prompt
-                )
+                prompt, note_seqs = self._prepare_operator_notes(active_worker, prompt)
                 await self._set_agent(active_worker, AgentState.WORKING, current_task=task_id)
                 try:
                     result = await self.adapters[active_worker].run(
@@ -1686,11 +1749,8 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                         ok=False, returncode=1,
                         error=f"{type(exc).__name__}: {exc}",
                     )
-                else:
-                    await self._ack_operator_notes(
-                        active_worker, nudge_seqs
-                    )
                 self._record_usage(active_worker, task_id, result)
+                await self._settle_operator_notes(active_worker, note_seqs, result)
                 await self._set_agent(
                     active_worker,
                     AgentState.IDLE if result.ok else (
@@ -1769,7 +1829,8 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
             grok_result = await self._run_grok(
                 review_prompt,
                 self.workspace.architect_path,
-                phase="review", read_only=True,
+                phase="review",
+                read_only=self.profile.architect_read_only,
             )
             if not grok_result.ok:
                 raise OrchestratorError(
@@ -1782,7 +1843,8 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                 repair = await self._run_grok(
                     f"Review JSON failed validation: {exc}. Repeat only one valid marked review object.",
                     self.workspace.architect_path,
-                    phase="review-repair", read_only=True,
+                    phase="review-repair",
+                    read_only=self.profile.architect_read_only,
                 )
                 if not repair.ok:
                     raise OrchestratorError("Review repair failed") from exc
@@ -1880,16 +1942,26 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
             risk = RiskLevel.HIGH
             update["risk"] = risk
         if worker == "spark":
-            too_broad = (
-                risk != RiskLevel.LOW
-                or (packet.max_files is not None and packet.max_files > 3)
-                or len(packet.allowed_paths) > 4
-                or unbounded_scope
-            )
+            if self.profile_id == "combat":
+                too_broad = (
+                    risk in {RiskLevel.HIGH, RiskLevel.CRITICAL}
+                    or (packet.max_files is not None and packet.max_files > 5)
+                    or len(packet.allowed_paths) > 6
+                    or unbounded_scope
+                )
+            else:
+                too_broad = (
+                    risk != RiskLevel.LOW
+                    or (packet.max_files is not None and packet.max_files > 3)
+                    or len(packet.allowed_paths) > 4
+                    or unbounded_scope
+                )
             if too_broad:
                 if not self.settings.agent("luna").enabled:
+                    secondary = self.settings.agent("spark").display_name
+                    primary = self.settings.agent("luna").display_name
                     raise OrchestratorError(
-                        "Task is too broad for Spark and the Luna lane is disabled"
+                        f"Task is too broad for {secondary} and {primary} is disabled"
                     )
                 worker = "luna"
                 update["worker"] = worker
@@ -1898,13 +1970,20 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                 worker = "luna"
                 update["worker"] = worker
             else:
+                secondary_max_files = 5 if self.profile_id == "combat" else 3
+                secondary_max_paths = 6 if self.profile_id == "combat" else 4
+                secondary_risk_ok = (
+                    risk in {RiskLevel.LOW, RiskLevel.MEDIUM}
+                    if self.profile_id == "combat"
+                    else risk == RiskLevel.LOW
+                )
                 can_use_spark = (
                     worker == "luna"
                     and self.settings.agent("spark").enabled
-                    and risk == RiskLevel.LOW
+                    and secondary_risk_ok
                     and not unbounded_scope
-                    and len(packet.allowed_paths) <= 4
-                    and (packet.max_files or 3) <= 3
+                    and len(packet.allowed_paths) <= secondary_max_paths
+                    and (packet.max_files or secondary_max_files) <= secondary_max_files
                 )
                 if not can_use_spark:
                     raise OrchestratorError(
@@ -1913,7 +1992,7 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                 worker = "spark"
                 update["worker"] = worker
         if worker == "spark" and packet.max_files is None:
-            update["max_files"] = 3
+            update["max_files"] = 5 if self.profile_id == "combat" else 3
         if not packet.stop_conditions:
             update["stop_conditions"] = [
                 "A public contract change becomes necessary",
@@ -1936,8 +2015,18 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
     def _fallback_worker(self, current: str, packet: TaskPacket) -> str | None:
         if current == "spark" and self.settings.agent("luna").enabled:
             return "luna"
-        if current == "luna" and packet.risk == RiskLevel.LOW and (packet.max_files or 3) <= 3 \
-                and self.settings.agent("spark").enabled:
+        secondary_max_files = 5 if self.profile_id == "combat" else 3
+        risk_ok = (
+            packet.risk in {RiskLevel.LOW, RiskLevel.MEDIUM}
+            if self.profile_id == "combat"
+            else packet.risk == RiskLevel.LOW
+        )
+        if (
+            current == "luna"
+            and risk_ok
+            and (packet.max_files or secondary_max_files) <= secondary_max_files
+            and self.settings.agent("spark").enabled
+        ):
             return "spark"
         return None
 

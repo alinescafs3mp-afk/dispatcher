@@ -118,6 +118,9 @@ class ServerConfig:
 @dataclass(slots=True)
 class ProjectConfig:
     repo: str = ""
+    # Additional Jericho work surfaces used for continuity discovery. They are
+    # context roots, not implicit Git integration or write scopes.
+    operational_roots: list[str] = field(default_factory=lambda: ["~/.jericho"])
     backlog_globs: list[str] = field(default_factory=lambda: list(DEFAULT_BACKLOG_GLOBS))
     validation_commands: list[str] = field(default_factory=list)
     protected_paths: list[str] = field(default_factory=lambda: [
@@ -137,17 +140,51 @@ class ProjectConfig:
     def repo_path(self) -> Path:
         return Path(os.path.expanduser(self.repo)).resolve()
 
+    @property
+    def operational_root_entries(self) -> list[tuple[str, Path]]:
+        repo = self.repo_path
+        entries: list[tuple[str, Path]] = []
+        seen = {repo}
+        for raw in self.operational_roots:
+            value = str(raw).strip()
+            if not value:
+                continue
+            try:
+                path = Path(os.path.expandvars(os.path.expanduser(value))).resolve()
+            except (OSError, RuntimeError):
+                continue
+            if path in seen:
+                continue
+            seen.add(path)
+            entries.append((value, path))
+        return entries
+
+    @property
+    def operational_paths(self) -> list[Path]:
+        return [path for _, path in self.operational_root_entries]
+
+    @property
+    def known_working_paths(self) -> list[Path]:
+        return [self.repo_path, *self.operational_paths]
+
 
 @dataclass(slots=True)
 class ProfilesConfig:
     default: str = "reserve"
     combat_grok_enabled: bool = False
+    # Reserve Luna is the heavyweight emergency worker. Keep its strongest
+    # supported reasoning and the same unrestricted Codex mode as the Sol pair.
+    reserve_luna_effort: str = "max"
+    reserve_luna_full_access: bool = True
     # Empty combat Codex model names intentionally delegate model selection to
-    # the corresponding authenticated wrapper/profile.
+    # the corresponding authenticated wrapper/profile. Both normal Codex lanes
+    # still force Ultra reasoning, the CLI's ultracode tier.
     combat_sol_model: str = ""
-    combat_sol_effort: str = "max"
+    combat_sol_effort: str = "ultra"
+    combat_sol_full_access: bool = True
     combat_goodman_model: str = ""
-    combat_goodman_effort: str = "max"
+    combat_goodman_effort: str = "ultra"
+    combat_goodman_full_access: bool = True
     combat_grok_model: str = "grok-4.6"
     combat_grok_effort: str = "xhigh"
 
@@ -192,6 +229,10 @@ class Settings:
             "server": asdict(self.server),
             "project": {
                 "repo": self.project.repo,
+                "operational_roots": list(self.project.operational_roots),
+                "known_working_paths": [
+                    str(path) for path in self.project.known_working_paths
+                ],
                 "protected_paths": list(self.project.protected_paths),
                 "high_risk_paths": list(self.project.high_risk_paths),
             },
@@ -266,9 +307,12 @@ def default_settings(repo: str = "") -> Settings:
                 binary_candidates=["codex-solgoodman"],
                 model="gpt-5.6-luna",
                 effort="max",
-                effort_options=["none", "low", "medium", "high", "xhigh", "max"],
+                effort_options=[
+                    "none", "low", "medium", "high", "xhigh", "max",
+                ],
                 strip_env=list(CODEX_API_ENV_VARS),
                 inherit_previous_session=True,
+                unsafe_full_access=True,
             ),
         },
     )
@@ -301,4 +345,4 @@ def load_settings(path: str | Path | None = None, repo_override: str = "") -> Se
 
 
 def render_example(repo: str = "/path/to/friday") -> str:
-    return f'''# Sol Link Dispatcher configuration\n\n[server]\nhost = "127.0.0.1"\nport = 8787\nopen_browser = true\n\n[project]\nrepo = "{repo}"\nbacklog_globs = ["BACKLOG*.md", "**/BACKLOG*.md", "TODO*.md", "**/TODO*.md", "ROADMAP*.md", "**/ROADMAP*.md", "HANDOFF*.md", "**/HANDOFF*.md", "outer_sol/**/*.md", "handoffs/**/*.md", ".sol-link/**/*.md"]\nvalidation_commands = []\nprotected_paths = [".git/**", ".env", ".env.*", "**/*.pem", "**/*.key", "**/*.token"]\nhigh_risk_paths = ["**/migrations/**", "**/security/**", "**/auth/**", "**/sandbox/**", "**/engineer_mode/**", "**/permissions/**"]\nsession_search_roots = ["~/.codex/sessions", "~/.config/codex-multi/profiles/*/sessions"]\n\n[profiles]\ndefault = "reserve"\ncombat_grok_enabled = false\n# Empty model names let the authenticated codex wrappers select their normal model.\ncombat_sol_model = ""\ncombat_sol_effort = "max"\ncombat_goodman_model = ""\ncombat_goodman_effort = "max"\ncombat_grok_model = "grok-4.6"\ncombat_grok_effort = "xhigh"\n\n[orchestrator]\nruntime_dir = "~/.local/state/sol-link-nightshift"\nmax_tasks = 100\nmax_revisions = 2\narchitect_session_max_turns = 16\nrecover_predecessor_sessions = true\ncontinue_until_backlog_done = true\nauto_accept_low_risk = true\nauto_accept_medium_risk = false\nrequire_human_for_high_risk = true\ncopy_untracked_max_file_mb = 25\ncopy_untracked_total_mb = 250\nlog_tail_lines = 1000\ncommand_timeout_seconds = 3600\npoll_seconds = 1.0\n\n[agents.grok]\nid = "grok-architect"\nrole = "temporary chief architect and reviewer"\nadapter = "grok"\nbinary_candidates = ["grok-build", "grok"]\nmodel = "grok-4.6"\neffort = "xhigh"\neffort_options = ["low", "medium", "high", "xhigh"]\nstrip_env = ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nmax_turns = 80\nextra_args = []\nquota_command = []\ninherit_previous_session = false\nenabled = true\nunsafe_full_access = false\n\n[agents.spark]\nid = "codex-spark"\nrole = "micro-implementation worker"\nadapter = "codex"\nbinary_candidates = ["codex"]\nmodel = "gpt-5.3-codex-spark"\neffort = "high"\neffort_options = ["low", "medium", "high", "xhigh"]\nstrip_env = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AZURE_OPENAI_API_KEY", "OPENAI_BASE_URL"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nextra_args = []\nquota_command = []\ninherit_previous_session = true\nenabled = true\nunsafe_full_access = false\n\n[agents.luna]\nid = "codex-luna"\nrole = "implementation owner and debugger"\nadapter = "codex"\nbinary_candidates = ["codex-solgoodman"]\nmodel = "gpt-5.6-luna"\neffort = "max"\neffort_options = ["none", "low", "medium", "high", "xhigh", "max"]\nstrip_env = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AZURE_OPENAI_API_KEY", "OPENAI_BASE_URL"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nextra_args = []\nquota_command = []\ninherit_previous_session = true\nenabled = true\nunsafe_full_access = false\n'''
+    return f'''# Sol Link Dispatcher configuration\n\n[server]\nhost = "127.0.0.1"\nport = 8787\nopen_browser = true\n\n[project]\nrepo = "{repo}"\noperational_roots = ["~/.jericho"]\nbacklog_globs = ["BACKLOG*.md", "**/BACKLOG*.md", "TODO*.md", "**/TODO*.md", "ROADMAP*.md", "**/ROADMAP*.md", "HANDOFF*.md", "**/HANDOFF*.md", "outer_sol/**/*.md", "handoffs/**/*.md", ".sol-link/**/*.md"]\nvalidation_commands = []\nprotected_paths = [".git/**", ".env", ".env.*", "**/*.pem", "**/*.key", "**/*.token"]\nhigh_risk_paths = ["**/migrations/**", "**/security/**", "**/auth/**", "**/sandbox/**", "**/engineer_mode/**", "**/permissions/**"]\nsession_search_roots = ["~/.codex/sessions", "~/.config/codex-multi/profiles/*/sessions"]\n\n[profiles]\ndefault = "reserve"\ncombat_grok_enabled = false\nreserve_luna_effort = "max"\nreserve_luna_full_access = true\n# Empty model names let the authenticated codex wrappers select their normal model.\ncombat_sol_model = ""\ncombat_sol_effort = "ultra"\ncombat_sol_full_access = true\ncombat_goodman_model = ""\ncombat_goodman_effort = "ultra"\ncombat_goodman_full_access = true\ncombat_grok_model = "grok-4.6"\ncombat_grok_effort = "xhigh"\n\n[orchestrator]\nruntime_dir = "~/.local/state/sol-link-nightshift"\nmax_tasks = 100\nmax_revisions = 2\narchitect_session_max_turns = 16\nrecover_predecessor_sessions = true\ncontinue_until_backlog_done = true\nauto_accept_low_risk = true\nauto_accept_medium_risk = false\nrequire_human_for_high_risk = true\ncopy_untracked_max_file_mb = 25\ncopy_untracked_total_mb = 250\nlog_tail_lines = 1000\ncommand_timeout_seconds = 3600\npoll_seconds = 1.0\n\n[agents.grok]\nid = "grok-architect"\nrole = "temporary chief architect and reviewer"\nadapter = "grok"\nbinary_candidates = ["grok-build", "grok"]\nmodel = "grok-4.6"\neffort = "xhigh"\neffort_options = ["low", "medium", "high", "xhigh"]\nstrip_env = ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nmax_turns = 80\nextra_args = []\nquota_command = []\ninherit_previous_session = false\nenabled = true\nunsafe_full_access = false\n\n[agents.spark]\nid = "codex-spark"\nrole = "micro-implementation worker"\nadapter = "codex"\nbinary_candidates = ["codex"]\nmodel = "gpt-5.3-codex-spark"\neffort = "high"\neffort_options = ["low", "medium", "high", "xhigh"]\nstrip_env = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AZURE_OPENAI_API_KEY", "OPENAI_BASE_URL"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nextra_args = []\nquota_command = []\ninherit_previous_session = true\nenabled = true\nunsafe_full_access = false\n\n[agents.luna]\nid = "codex-luna"\nrole = "implementation owner and debugger"\nadapter = "codex"\nbinary_candidates = ["codex-solgoodman"]\nmodel = "gpt-5.6-luna"\neffort = "max"\neffort_options = ["none", "low", "medium", "high", "xhigh", "max"]\nstrip_env = ["OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN", "AZURE_OPENAI_API_KEY", "OPENAI_BASE_URL"]\nscrub_sensitive_env = true\ntimeout_seconds = 7200\nextra_args = []\nquota_command = []\ninherit_previous_session = true\nenabled = true\nunsafe_full_access = true\n'''

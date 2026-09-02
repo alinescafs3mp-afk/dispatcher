@@ -69,7 +69,7 @@ Human goal: {goal}
 Integration worktree: `{integration_path}`
 Repository reconnaissance artifact: `{dossier_path}`
 
-The bounded repository excerpt below is embedded so the lead architect can recover context even when its CLI sandbox cannot read outside the worktree. Inspect current files, tests, branches, and the integration HEAD directly before trusting prose.
+The bounded repository excerpt below is embedded for deterministic continuity. Even with full CLI permissions, treat the disposable architect worktree and current integration HEAD as the authoritative product state. Inspect files, tests, branches, and backlog evidence directly before trusting prose.
 
 # Repository reconnaissance excerpt
 {dossier_excerpt}

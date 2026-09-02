@@ -4,6 +4,7 @@ import glob
 import json
 import os
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ class SessionSummary:
     path: str
     session_id: str
     cwd: str
+    matched_root: str
     modified_at: float
     score: int
     last_user: str
@@ -60,9 +62,57 @@ def _extract_text(payload: Any) -> str:
     return ""
 
 
-def summarize_session(path: Path, repo: Path) -> SessionSummary | None:
+def _resolve_path(value: str | Path) -> Path | None:
     try:
-        size = path.stat().st_size
+        return Path(os.path.expandvars(str(value))).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return None
+
+
+def _score_working_directory(
+    cwd: str,
+    repo: Path,
+    working_roots: Iterable[Path] | None,
+) -> tuple[int, str]:
+    cwd_path = _resolve_path(cwd)
+    repo_path = _resolve_path(repo)
+    if cwd_path is None or repo_path is None:
+        return 0, ""
+
+    roots: list[tuple[Path, int, int]] = [(repo_path, 120, 110)]
+    seen = {repo_path}
+    for raw_root in working_roots or ():
+        root = _resolve_path(raw_root)
+        if root is None or root in seen:
+            continue
+        seen.add(root)
+        roots.append((root, 100, 90))
+
+    best_score = 0
+    matched_root = ""
+    for root, exact_score, descendant_score in roots:
+        if cwd_path == root:
+            score = exact_score
+        else:
+            try:
+                cwd_path.relative_to(root)
+            except ValueError:
+                continue
+            score = descendant_score
+        if score > best_score:
+            best_score = score
+            matched_root = str(root)
+    return best_score, matched_root
+
+
+def summarize_session(
+    path: Path,
+    repo: Path,
+    working_roots: Iterable[Path] | None = None,
+) -> SessionSummary | None:
+    try:
+        stat = path.stat()
+        size = stat.st_size
         with path.open("rb") as handle:
             head = handle.read(min(size, 256_000))
             if size > 512_000:
@@ -111,40 +161,56 @@ def summarize_session(path: Path, repo: Path) -> SessionSummary | None:
         )
         if matches:
             session_id = matches[-1]
-    repo_s = str(repo.resolve())
-    score = 0
-    if cwd:
-        try:
-            cwd_resolved = str(Path(cwd).expanduser().resolve())
-        except OSError:
-            cwd_resolved = cwd
-        if cwd_resolved == repo_s:
-            score += 100
-        elif repo.name.lower() in cwd_resolved.lower():
-            score += 40
+    score, matched_root = _score_working_directory(cwd, repo, working_roots)
+    if score == 0 and cwd and repo.name.lower() in cwd.lower():
+        score = 40
     combined = "\n".join(users[-2:] + assistants[-2:]).lower()
     if repo.name.lower() in combined:
         score += 10
     return SessionSummary(
         path=str(path), session_id=session_id, cwd=cwd,
-        modified_at=path.stat().st_mtime, score=score,
+        matched_root=matched_root,
+        modified_at=stat.st_mtime, score=score,
         last_user=compact_text(redact(users[-1]), 4000) if users else "",
         last_assistant=compact_text(redact(assistants[-1]), 6000) if assistants else "",
         model=model,
     )
 
 
-def discover_sessions(search_roots: list[str], repo: Path, limit: int = 12) -> list[SessionSummary]:
+def discover_sessions(
+    search_roots: list[str],
+    repo: Path,
+    limit: int = 12,
+    working_roots: Iterable[Path] | None = None,
+) -> list[SessionSummary]:
     files: set[Path] = set()
     for root in search_roots:
-        expanded = os.path.expanduser(root)
-        for candidate in glob.glob(expanded, recursive=True):
+        expanded = os.path.expandvars(os.path.expanduser(root))
+        try:
+            candidates = glob.glob(expanded, recursive=True)
+        except OSError:
+            continue
+        for candidate in candidates:
             path = Path(candidate)
-            if path.is_dir():
-                files.update(path.rglob("*.jsonl"))
-            elif path.suffix == ".jsonl":
-                files.add(path)
-    ordered = sorted(files, key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)[:80]
-    summaries = [summary for path in ordered if (summary := summarize_session(path, repo))]
+            try:
+                if path.is_dir():
+                    files.update(path.rglob("*.jsonl"))
+                elif path.suffix == ".jsonl":
+                    files.add(path)
+            except OSError:
+                continue
+
+    def modified_at(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0
+
+    ordered = sorted(files, key=modified_at, reverse=True)[:80]
+    summaries = [
+        summary
+        for path in ordered
+        if (summary := summarize_session(path, repo, working_roots))
+    ]
     summaries.sort(key=lambda item: (item.score, item.modified_at), reverse=True)
     return summaries[:limit]

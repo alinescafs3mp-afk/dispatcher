@@ -35,6 +35,7 @@ class ProfileSpec:
     worker_keys: tuple[str, ...]
     slot_order: tuple[str, ...]
     recover_predecessors: bool
+    architect_read_only: bool
     slots: dict[str, SlotSpec]
 
 
@@ -58,6 +59,7 @@ _PROFILES: dict[str, ProfileSpec] = {
         worker_keys=("luna", "spark"),
         slot_order=("grok", "luna", "spark"),
         recover_predecessors=True,
+        architect_read_only=True,
         slots={
             "grok": SlotSpec(
                 source_key="grok",
@@ -101,6 +103,11 @@ _PROFILES: dict[str, ProfileSpec] = {
         worker_keys=("luna", "spark"),
         slot_order=("grok", "luna", "spark"),
         recover_predecessors=False,
+        # Sol is deliberately granted the operator's normal ultracode/full-access
+        # execution mode. The architect checkout remains disposable and is hard
+        # reset after every turn; accepted product changes still flow through a
+        # separately reviewed worker packet.
+        architect_read_only=False,
         slots={
             # Logical slot names stay stable so the existing closed loop remains small.
             # In combat, the architect slot is backed by the normal `codex` account.
@@ -158,13 +165,19 @@ def resolve_profile_agents(
         config.lane = slot.lane
         config.physical_key = slot.source_key
         config.optional = slot.optional
-        if profile_id == "combat":
+        if profile_id == "reserve":
+            if logical_key == "luna":
+                config.effort = profile_config.reserve_luna_effort
+                config.unsafe_full_access = profile_config.reserve_luna_full_access
+        else:
             if logical_key == "grok":
                 config.model = profile_config.combat_sol_model
                 config.effort = profile_config.combat_sol_effort
+                config.unsafe_full_access = profile_config.combat_sol_full_access
             elif logical_key == "luna":
                 config.model = profile_config.combat_goodman_model
                 config.effort = profile_config.combat_goodman_effort
+                config.unsafe_full_access = profile_config.combat_goodman_full_access
             else:
                 config.model = profile_config.combat_grok_model
                 config.effort = profile_config.combat_grok_effort
@@ -193,6 +206,7 @@ def profile_public_dict(
         "worker_keys": list(spec.worker_keys),
         "slot_order": list(spec.slot_order),
         "recover_predecessors": spec.recover_predecessors,
+        "architect_read_only": spec.architect_read_only,
         "combat_grok_enabled": combat_grok_enabled,
         "agents": {
             key: {
@@ -208,6 +222,7 @@ def profile_public_dict(
                 "effort": config.effort,
                 "enabled": config.enabled,
                 "optional": config.optional,
+                "unsafe_full_access": config.unsafe_full_access,
             }
             for key, config in agents.items()
         },
@@ -229,7 +244,13 @@ def profile_catalog(profile_config: ProfilesConfig, combat_grok_enabled: bool) -
     ]
 
 
-def profile_prompt_context(spec: ProfileSpec, agents: dict[str, AgentConfig]) -> str:
+def profile_prompt_context(
+    spec: ProfileSpec,
+    agents: dict[str, AgentConfig],
+    *,
+    repository: str = "",
+    operational_roots: tuple[str, ...] | list[str] = (),
+) -> str:
     lines = [
         "# Active Sol Link operating profile",
         f"Profile: `{spec.id}` ({spec.label})",
@@ -240,17 +261,32 @@ def profile_prompt_context(spec: ProfileSpec, agents: dict[str, AgentConfig]) ->
     for key in spec.slot_order:
         config = agents[key]
         availability = "enabled" if config.enabled else "disabled"
+        access = "full access" if config.unsafe_full_access else "sandboxed"
         worker_hint = ""
         if key in spec.worker_keys:
             worker_hint = f"; dispatch with worker `{key}`"
         lines.append(
             f"- `{key}`: {config.display_name}, {config.role}, backed by "
             f"`{config.binary_candidates[0] if config.binary_candidates else 'unresolved'}` "
-            f"({availability}{worker_hint})."
+            f"({availability}; {access}{worker_hint})."
         )
     lines += [
         "",
         f"The lead architect is {agents[spec.architect_key].display_name}. "
         "Workers never reinterpret logical keys from another profile.",
     ]
+    roots = [str(root).strip() for root in operational_roots if str(root).strip()]
+    if repository or roots:
+        lines += ["", "# Known Jericho work surfaces"]
+        if repository:
+            lines.append(f"- Product repository: `{repository}`")
+        lines.extend(f"- Additional operational root: `{root}`" for root in roots)
+        lines += [
+            "Do not assume relevant history or operational evidence was created from "
+            "the repository cwd. Sessions, handoffs, watcher state, and supporting "
+            "artifacts may originate from any listed root.",
+            "Additional operational roots are continuity context, not implicit Git "
+            "write or integration scopes. Persistent product changes still follow "
+            "the active task packet and reviewed integration path.",
+        ]
     return "\n".join(lines)

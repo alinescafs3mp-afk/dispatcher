@@ -1,72 +1,70 @@
 # Sol Link Dispatcher
 
-Локальный оркестратор для разработки Friday через уже авторизованные подписочные CLI. Он поддерживает два режима одной команды:
+Локальный подписочный оркестратор для непрерывной разработки Friday. Он управляет двумя режимами одной команды через уже авторизованные CLI, без API-ключей и без смешивания аккаунтов, сессий и ролей.
 
-- **Бой / `combat`**: штатная разработка. Sol ведёт архитектуру и живой backlog, SolGoodman реализует и отлаживает, Grok можно подключить как быстрого дополнительного исполнителя с другим углом зрения.
-- **Резерв / `reserve`**: аварийное продолжение работы после исчерпания обычных лимитов или обрыва сессий Sol и SolGoodman. Grok временно становится архитектором, Luna берёт крупную реализацию, Spark получает микрозадачи.
+## Профили
 
-Dispatcher не требует API-ключей и не переключает подписочные CLI на metered API billing. Он использует их существующие локальные логины, изолированные Git worktree, SQLite-реестр и браузерный пульт.
+В веб-панели есть переключатель **Бой / Резерв**. Профиль нельзя менять, пока жив текущий mission task, включая ручную паузу, или выполняется model turn. Сохранённую после рестарта paused-миссию можно оставить в истории: при её возобновлении Dispatcher сам восстановит записанный профиль и состав команды.
 
-## Проводка профилей
+### Бой
 
-| Режим | Роль | Отображаемый участник | Физический CLI |
-|---|---|---|---|
-| Бой | lead architect, backlog owner, reviewer | **Sol** | `codex` |
-| Бой | implementation owner, debugger | **SolGoodman** | `codex-solgoodman` |
-| Бой | optional fast assistant | **Grok 4.6** | `grok-build` или `grok` |
-| Резерв | temporary architect and reviewer | **Grok 4.6** | `grok-build` или `grok` |
-| Резерв | primary implementation worker | **Codex Luna** | `codex-solgoodman` |
-| Резерв | bounded micro worker | **Codex Spark** | `codex` |
+Штатный контур разработки:
 
-Внутренний машинный контракт сохраняет три стабильных lane key: `grok`, `luna`, `spark`. Их физическая проводка меняется вместе с профилем, но уже проверенный цикл orchestration остаётся тем же. Сессии, reasoning-настройки, участники, логи и chat-каналы разделены по профилям.
+- `codex` занимает место **Sol**: lead architect, владелец архитектуры и бэклога, ревьюер и интеграционная инстанция;
+- `codex-solgoodman` занимает место **SolGoodman**: основной инженер, отладчик и владелец реализации;
+- `grok-build` или `grok` подключается опционально как быстрый помощник с другим углом обзора.
 
-> В резервном профиле названия локальных команд не совпадают с именами предшественников. `codex` продолжает линию SolGoodman и после исчерпания обычного лимита используется как Spark. `codex-solgoodman` продолжает линию Sol и используется как Luna. Dispatcher не смешивает эти сохранённые сессии.
+Оба Codex-участника по умолчанию работают с `model_reasoning_effort="ultra"`. Конкретная модель оставлена за уже настроенными wrapper/profile командами `codex` и `codex-solgoodman`, поэтому Dispatcher не ломает локальный выбор Sol жёстким `--model`. Для автоматических боевых ходов обоим включён `--dangerously-bypass-approvals-and-sandbox`.
 
-## Что умеет
+Sol сверяет состояние репозитория, формирует, дополняет и декомпозирует бэклог, затем выдаёт по одному ограниченному task packet. SolGoodman реализует основную работу. Подключённый Grok получает только подходящие вспомогательные пакеты. Каждая реализация проходит детерминированную проверку scope, validation, ревью архитектора и, при необходимости, human gate.
 
-- переключает **Бой / Резерв** из веб-пульта, но только когда нет активной миссии или модельного хода;
-- запоминает выбранный профиль и состояние опционального Grok;
-- закрепляет профиль в каждой миссии и автоматически восстанавливает правильную проводку при resume;
-- в бою поручает Sol формировать, исправлять, декомпозировать и закрывать backlog;
-- в резерве проводит Phase Zero и допинывает подтверждённый остаток работы;
-- запускает замкнутый цикл `architect contract -> worker -> deterministic validation -> architect review -> integrate/revise/escalate`;
-- держит source checkout, integration worktree, architect worktree и worker worktree раздельно;
-- безопасно переносит незакоммиченные изменения исходного checkout в отдельную integration-ветку, не очищая оригинал;
-- сохраняет миссии, task packets, события, логи, usage, reasoning, профильные настройки и chat в SQLite WAL;
-- после рестарта отмечает незавершённые миссии как paused и сверяет SQLite с фактическим Git;
-- измеряет scope и risk до модельного review;
-- требует человека для high/critical integration и может быть настроен строже;
-- отбрасывает protected paths и credential-shaped содержимое до worker commit;
-- читает Codex quota windows через локальный `codex app-server`;
-- читает Grok credits через локальный ACP billing extension с fallback-командой;
-- показывает состояние всех участников, reasoning, usage, лимиты, task ledger и потоковые логи.
+### Резерв
+
+Аварийный контур, существовавший до появления профилей:
+
+- Grok 4.6 временно становится архитектором и ревьюером;
+- `codex-solgoodman` используется как **Codex Luna**, основной аварийный исполнитель;
+- `codex` используется как **Codex Spark**, быстрый исполнитель микрозадач.
+
+Luna по умолчанию работает на самом сильном поддерживаемом reasoning `max` и с полным доступом. Spark остаётся в `workspace-write`. Grok-архитектор остаётся read-only. Резервный профиль проводит Phase Zero, восстанавливает оборванную работу, сверяет Git, локальные сессии и handoff-материалы, после чего допинывает безопасно восстановимый остаток.
+
+> Проводка аккаунтов намеренная: в резерве локальный `codex` продолжает линию SolGoodman и становится Spark, а `codex-solgoodman` продолжает линию Sol и становится Luna. Dispatcher не угадывает владельца сессии по времени и не cross-resume-ит соседний аккаунт.
+
+## Рабочие контуры Friday
+
+Dispatcher больше не предполагает, что вся жизнь Солов происходила строго внутри одного `cwd`. Для текущего развёртывания базовая конфигурация выглядит так:
+
+```toml
+[project]
+repo = "/jericho/jericho"
+operational_roots = ["~/.jericho"]
+```
+
+`project.repo` остаётся Git-источником истины и основой integration/architect/worker worktree. `operational_roots` используются как дополнительные поверхности непрерывности: там ищутся подходящие backlog/handoff-файлы, состояние watchers и учитывается `cwd` найденных Codex-сессий. Поэтому сессия Сола из `~/.jericho` получает тот же статус релевантной рабочей сессии, а не выглядит случайной только из-за другого каталога.
+
+При этом operational root не становится неявным write scope. Автоматическая интеграция по-прежнему относится к Git-репозиторию и явным task packet. Это защищает домашнее состояние от случайной записи участником с full access.
 
 ## Прямые линии к участникам
 
-Пульт позволяет выбрать любого активного участника и отправить сообщение одним из трёх способов:
+Панель позволяет говорить не только с архитектором, но и с любым активным участником профиля.
 
-- **Auto**: если lane свободен, открывается read-only диалог; если занят, сообщение ставится в очередь как nudge.
-- **Talk now**: немедленный read-only model turn. Для занятого lane запрос отклоняется вместо скрытого ожидания.
-- **Nudge next turn**: сообщение долговечно сохраняется и добавляется в следующий модельный ход выбранного участника.
+- **Talk now** открывает отдельный read-only model turn. Он не редактирует код, не создаёт задачу и не вмешивается молча в автоматический цикл.
+- **Nudge next work turn** сохраняет операторскую заметку в SQLite и прикладывает её к следующему рабочему ходу выбранного участника.
+- **Auto** разговаривает сразу, если lane свободен, либо автоматически превращает сообщение в durable nudge, если lane занят.
 
-Прямой chat не редактирует файлы, не создаёт task packet и не интегрирует изменения. Это канал наблюдения и ручного управления. Nudge тоже не ломает текущий контракт посередине: он попадает в ближайший следующий turn и остаётся под ограничениями task packet, stop conditions и safety policy.
+Nudge считается доставленным после успешного хода либо после появления подтверждения от провайдера: события или финального ответа. Если CLI падает до любого такого подтверждения, заметка остаётся в очереди и будет предложена повторно. Это позволяет вручную остановить архитектурный занос, уточнить ограничение или попросить участника перепроверить странное поведение, не убивая текущий процесс.
 
-Для HTTP API можно адресовать участника по отображаемому имени, CLI, agent ID либо явно по lane key через `slot:grok`, `slot:luna`, `slot:spark`. В бою простое имя `Grok` означает опционального Grok-помощника, а `slot:grok` означает внутренний architect lane, то есть Sol.
+## Realtime-панель
 
-## Realtime без перезагрузки
+Всё изменяемое состояние обновляется без перезагрузки страницы:
 
-Веб-интерфейс получает authoritative snapshot и затем слушает WebSocket. Обновляются:
+- активный профиль и подключение Grok;
+- миссия, пауза, остановка, resume и human gate;
+- статусы участников, текущие задачи и ошибки;
+- reasoning, режим доступа, usage и лимиты;
+- task ledger, логи, чат и статус queued/delivered у nudges.
 
-- активный профиль и доступность Grok;
-- миссия и её переходы состояния;
-- task packets, attempts, review и human gate;
-- статусы моделей и текущие задачи;
-- stdout/stderr, assistant output, tool и validation logs;
-- адресный chat и состояние queued/delivered nudges;
-- token usage и quota windows;
-- reasoning picker и обнаруженные model capabilities.
-
-Snapshot содержит последний event sequence. Клиент отслеживает применённый и наблюдаемый sequence, обнаруживает разрывы, делает resync, игнорирует устаревшие HTTP-ответы, держит single-flight refresh, проверяет heartbeat, восстанавливается после сна вкладки и переподключается с backoff и jitter. Десятисекундный polling остаётся страховочной сеткой.
+Основной канал обновления работает через WebSocket: каждое уведомление запускает single-flight загрузку нового authoritative snapshot. Устаревшие HTTP-ответы отбрасываются, а reconnect, пробуждение вкладки и периодический polling запускают дополнительную синхронизацию.
 
 ## Быстрый запуск
 
@@ -74,66 +72,60 @@ Snapshot содержит последний event sequence. Клиент отс
 
 - Linux или macOS с Git;
 - Python 3.11+;
-- авторизованные `codex`, `codex-solgoodman` и, для Grok lane, `grok-build` или `grok`;
+- авторизованные `codex`, `codex-solgoodman` и, при необходимости, `grok-build`/`grok`;
 - целевой проект является Git-репозиторием.
 
 ```bash
 git clone https://github.com/alinescafs3mp-afk/dispatcher.git
 cd dispatcher
-
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -U pip
 python -m pip install -e ".[dev]"
 
-nightshift init --repo /absolute/path/to/friday
+nightshift init --repo /jericho/jericho
 nightshift doctor
 nightshift quotas
 nightshift serve
 ```
 
-Пульт по умолчанию открывается на `http://127.0.0.1:8787`.
+Панель по умолчанию откроется на `http://127.0.0.1:8787`.
 
 Альтернативный установщик:
 
 ```bash
-./scripts/install.sh /absolute/path/to/friday
+./scripts/install.sh /jericho/jericho
 source .venv/bin/activate
 nightshift serve
 ```
 
 ## Первый запуск
 
-1. Откройте `nightshift.toml` и проверьте `project.repo`, validation commands и protected/high-risk paths.
-2. Запустите `nightshift serve`.
-3. Выберите **Бой** или **Резерв**.
-4. В бою при необходимости включите `подключить Grok`.
-5. Нажмите **Doctor** и убедитесь, что обязательные lane готовы.
-6. Проверьте лимиты.
-7. Задайте mission goal и начните миссию.
-8. Следите за task ledger, participant logs и human gate.
+1. Выполнить `nightshift doctor` и проверить `ready: true` у обязательных lanes.
+2. Выполнить `nightshift quotas` и убедиться, что читаются нужные подписочные окна.
+3. Проверить `project.repo`, `project.operational_roots`, validation commands и protected/high-risk paths в `nightshift.toml`.
+4. Запустить `nightshift serve`.
+5. Выбрать **Бой** или **Резерв**. В бою при необходимости включить Grok.
+6. Задать цель миссии и запустить её.
+7. Следить за task ledger, логами и direct lines. High/critical risk не интегрируется без решения человека.
 
-Переключение режима заблокировано во время активной, paused или awaiting-human миссии. Остановите или завершите её перед сменой профиля. Сохранённая миссия всегда возобновляется со своим исходным профилем.
-
-Dispatcher не пушит результат в `main` целевого проекта. Принятые задачи собираются в отдельной ветке:
+Dispatcher не пушит изменения в целевой `main`. Принятые задачи собираются в отдельной integration-ветке:
 
 ```text
 nightshift/<mission-id>/integration
 ```
 
-Её следует проверить и слить обычными Git-инструментами.
+Эту ветку следует проверить и слить обычным Git-процессом.
 
-## CLI
+## Команды
 
 ```bash
-nightshift init --repo /path/to/friday
+nightshift init --repo /jericho/jericho
 nightshift doctor
 nightshift quotas
 nightshift scan
 nightshift serve
-nightshift directive --profile reserve ./EMERGENCY_TAKEOVER_DIRECTIVE.md
-nightshift directive --profile combat ./COMBAT_OPERATIONS_DIRECTIVE.md
-nightshift --version
+nightshift directive --profile combat ./COMBAT_DIRECTIVE.md
 ```
 
 Для другого файла конфигурации:
@@ -142,100 +134,53 @@ nightshift --version
 nightshift --config ~/.config/nightshift/friday.toml serve
 ```
 
-## Конфигурация профилей
-
-Сгенерированный `nightshift.toml` и [`nightshift.example.toml`](nightshift.example.toml) содержат:
+## Ключевая конфигурация профилей
 
 ```toml
 [profiles]
 default = "reserve"
 combat_grok_enabled = false
+reserve_luna_effort = "max"
+reserve_luna_full_access = true
 
-# Пустое имя модели оставляет штатный выбор авторизованному wrapper/profile.
+# Пустое имя модели оставляет выбор за локальным wrapper/profile.
 combat_sol_model = ""
-combat_sol_effort = "max"
+combat_sol_effort = "ultra"
+combat_sol_full_access = true
 combat_goodman_model = ""
-combat_goodman_effort = "max"
+combat_goodman_effort = "ultra"
+combat_goodman_full_access = true
+
 combat_grok_model = "grok-4.6"
 combat_grok_effort = "xhigh"
 ```
 
-Физические CLI настраиваются в `[agents.grok]`, `[agents.spark]`, `[agents.luna]`. Это шаблоны проводки, а не фиксированные роли во всех режимах.
+Reasoning picker в интерфейсе сохраняется отдельно для каждого профиля и логического lane. Новое значение применяется со следующего обращения к модели.
 
-Полные директивы:
+## Изоляция и полный доступ
 
-- [`COMBAT_OPERATIONS_DIRECTIVE.md`](COMBAT_OPERATIONS_DIRECTIVE.md)
-- [`EMERGENCY_TAKEOVER_DIRECTIVE.md`](EMERGENCY_TAKEOVER_DIRECTIVE.md)
+Каждая миссия имеет отдельные integration, architect и worker worktree. Исходный checkout не используется как рабочий каталог моделей.
 
-### Validation
+Полный доступ для боевых Солов и резервной Luna включён намеренно под доверенный Friday. Это означает реальный bypass sandbox у соответствующего Codex-процесса. Отдельные worktree, protected paths, secret scanning, validation и human gate уменьшают blast radius, но не превращают процесс в VM security boundary.
 
-```toml
-[project]
-repo = "/home/jericho/friday"
-validation_commands = [
-  "python -m pytest -q",
-  "python -m ruff check .",
-]
-```
+Даже для full-access участников direct chat всегда запускается read-only. Автоматический боевой Sol работает в disposable architect worktree, который жёстко сбрасывается после каждого хода. Долговечные изменения продукта всё равно проходят через worker branch, validation, review и integration.
 
-Validation запускается без shell. Операторы `&&`, `|`, `;`, redirects, command substitution, `sudo`, произвольные абсолютные executable и неразрешённые команды отклоняются.
+Для неизвестного или враждебного репозитория отключите full access и запускайте Dispatcher под отдельным Unix-пользователем, в контейнере или VM без домашних секретов. Подробности в [`SECURITY.md`](SECURITY.md).
 
-### Reasoning
+## Восстановление
 
-Picker сохраняется отдельно для каждого профиля и logical lane. Изменение применяется со следующего model turn.
+Резервный профиль собирает recovery dossier с:
 
-- Grok CLI получает `--effort <value>`.
-- Codex CLI получает `-c model_reasoning_effort="<value>"`.
-- Codex options уточняются через `model/list`, когда CLI публикует capabilities.
+- HEAD, branch, index, unstaged, untracked и stash;
+- локальными worktree, ветками и безопасными dirty patches;
+- backlog, roadmap, TODO, handoff и `outer_sol` материалами из repo и operational roots;
+- состоянием Sol Link watchers, включая `~/.jericho`;
+- кандидатами Codex-сессий строго по обнаруженному account home;
+- безопасной копией прерванного рабочего дерева в integration-ветке.
 
-### Полный доступ
+После рестарта незавершённая миссия становится paused, открытые задачи помечаются interrupted, затем состояние повторно сверяется с Git перед продолжением. Профиль и подключение Grok сохраняются вместе с миссией.
 
-По умолчанию architect работает read-only, workers работают в workspace sandbox, исходный checkout не является их рабочим каталогом, а credential-shaped environment variables удаляются из дочерних процессов.
-
-`unsafe_full_access = true` включает Codex bypass sandbox только для соответствующего writable worker lane. Для Friday это стоит оставлять выключенным.
-
-## Боевой профиль
-
-Sol получает фактический integration HEAD, repository dossier, живой backlog и компактный mission ledger. Он обязан:
-
-- сверить цель человека с кодом, тестами, архитектурой и backlog;
-- добавить или декомпозировать отсутствующую работу через bounded task packets;
-- выбрать ровно одну implementation-ready задачу;
-- отправить сложную работу SolGoodman;
-- использовать Grok только для подходящих ограниченных задач, когда helper включён;
-- проверить реальный Git diff и validation evidence;
-- провести отдельный финальный аудит перед `done`.
-
-Sol остаётся read-only architect. Изменение backlog-файла тоже является реализацией и проходит через worker packet и review. Это не ограничение интеллекта, а способ не смешивать решение, исполнение и подтверждение в одном непрозрачном ходе.
-
-## Резервный профиль
-
-Резерв начинает с dossier:
-
-- HEAD, branch, index, unstaged/untracked state и stash;
-- worktree и их безопасные dirty patch;
-- локальные ветки по активности;
-- backlog, roadmap, TODO, handoff и `outer_sol` материалы;
-- Sol Link watcher state;
-- кандидаты последних сессий обоих Codex-аккаунтов;
-- безопасная rescue-копия незакоммиченного кода.
-
-Spark получает read-only resume линии SolGoodman, Luna получает линию Sol. Они формируют handoff, а Grok сверяет его с Git и тестами. После рестарта мёртвый OS-процесс не «воскрешается»: код восстанавливается из Git, conversation session используется только как дополнительное свидетельство.
-
-## Безопасность
-
-Перед запуском на недоверенном репозитории прочитайте [`SECURITY.md`](SECURITY.md).
-
-Ключевые ограничения:
-
-- это локальный orchestration tool, не VM-level security boundary;
-- repository-controlled tests исполняют код;
-- live subscription login невозможно полноценно проверить в публичном CI;
-- для hostile repository нужен отдельный Unix user, container или VM без домашних секретов;
-- dashboard не имеет собственной аутентификации и должен оставаться на loopback либо находиться за authenticated TLS proxy;
-- human gate и secret scanner снижают риск, но не доказывают отсутствие любой уязвимости.
-
-## Разработка
+## Проверки разработки
 
 ```bash
 python -m pip install -e ".[dev]"
@@ -246,8 +191,4 @@ node --check nightshift/static/app.js
 python -m build
 ```
 
-Архитектура описана в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
-## Лицензия
-
-MIT, см. [`LICENSE`](LICENSE).
+Архитектура описана в [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Лицензия MIT.

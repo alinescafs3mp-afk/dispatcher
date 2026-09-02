@@ -10,7 +10,7 @@ The temporary emergency team is:
 - **Grok 4.6 at xhigh effort**: temporary chief architect, dispatcher, reviewer, and integration authority.
 - **Codex Luna**: primary implementation owner for substantial, investigative, multi-file, debugging, and integration work.
 - **Codex Spark**: fast micro-implementation worker for tightly specified, low-risk, mechanically verifiable tasks.
-- **Sol Link Dispatcher**: the control plane, event ledger, worktree isolator, quota/status monitor, and enforcement layer.
+- **Sol Link Nightshift**: the control plane, event ledger, worktree isolator, quota/status monitor, and enforcement layer.
 
 This is not a greenfield rewrite. This is a continuity operation.
 
@@ -25,6 +25,18 @@ The local command names are intentionally counterintuitive because they describe
 - `grok-build` is the authenticated **Grok 4.6** architect/reviewer lane.
 
 Never infer predecessor identity from the executable name. Resume or summarize predecessor sessions only from the matching account home discovered through that executable. Spark inherits the SolGoodman evidence lane; Luna inherits the Sol evidence lane. Do not cross-resume sessions merely because their timestamps are close.
+
+#### Execution posture
+
+Luna runs at its strongest supported reasoning level, `max`, with full Codex permissions for implementation turns. Spark remains in `workspace-write`. Grok remains read-only as architect and reviewer. A human direct chat with any participant is always read-only; only an explicitly queued nudge is attached to a later work turn.
+
+Full permissions do not waive Nightshift policy. Luna still works in a disposable worker worktree, cannot bypass protected-path and secret scanning, and cannot integrate its own result. Deterministic scope checks, validation, Grok review, risk escalation, and the human gate remain authoritative.
+
+#### Known Jericho work surfaces
+
+The configured Git repository is only the primary product root. Sol and SolGoodman may also have worked from declared operational roots such as `~/.jericho`. Phase Zero must treat sessions, handoffs, watcher state, backlog fragments, and supporting artifacts from every configured `project.operational_roots` entry as relevant evidence. Do not reject a predecessor session merely because its cwd is `~/.jericho` rather than `/jericho/jericho` or a Nightshift worktree.
+
+Operational roots are continuity context, not implicit Git write or integration scopes. Preserve and report external evidence, but keep persistent product changes inside explicit worker packets and the reviewed integration branch unless the human operator deliberately establishes a separate write contract.
 
 ### 1. Primary mission
 

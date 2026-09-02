@@ -11,6 +11,7 @@ from nightshift.process import ProcessRunner
 def test_codex_command_new_and_resume(tmp_path: Path) -> None:
     config = default_settings().agent("luna")
     config.binary_candidates = ["/bin/echo"]
+    config.unsafe_full_access = False
     adapter = CodexAdapter(config, ProcessRunner())
     adapter.binary = "/bin/echo"
     command = adapter._command(tmp_path, tmp_path / "last", "abc-123", False, "--json")

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+import nightshift.app as app_module
 from nightshift.app import create_app
 from nightshift.config import default_settings
 from nightshift.models import RiskLevel, TaskPacket
@@ -82,3 +83,25 @@ def test_predecessor_recovery_can_be_disabled(git_repo: Path, tmp_path: Path) ->
         assert any(row["type"] == "recovery.predecessor_sessions_skipped" for row in rows)
     finally:
         orch.db.close()
+
+
+def test_websocket_snapshot_watermark_and_heartbeat(
+    git_repo: Path, tmp_path: Path, monkeypatch,
+) -> None:
+    settings = make_settings(git_repo, tmp_path)
+
+    async def no_warmup(_orchestrator) -> None:
+        return None
+
+    monkeypatch.setattr(app_module, "_safe_warmup", no_warmup)
+    monkeypatch.setattr(app_module, "WEBSOCKET_HEARTBEAT_SECONDS", 0.01)
+    with (
+        TestClient(create_app(settings)) as client,
+        client.websocket_connect("/ws") as websocket,
+    ):
+        snapshot = websocket.receive_json()
+        assert snapshot["type"] == "state.snapshot"
+        assert snapshot["seq"] == snapshot["payload"]["event_seq"]
+        heartbeat = websocket.receive_json()
+        assert heartbeat["type"] == "system.heartbeat"
+        assert heartbeat["seq"] == snapshot["payload"]["event_seq"]

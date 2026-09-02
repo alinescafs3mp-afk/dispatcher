@@ -68,7 +68,7 @@
           <span class="state-dot"><i></i><b data-role="state">offline</b></span>
         </div>
         <div class="agent-facts"><span data-role="model">model</span><span data-role="usage">0 tokens</span></div>
-        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span data-role="optional" class="badge muted" hidden>optional</span></div>
+        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span class="agent-badges"><span data-role="access" class="badge muted">access…</span><span data-role="optional" class="badge muted" hidden>optional</span></span></div>
         <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Architect reasoning"></select><small>next turn</small></label>
         <div class="quota-zone" data-role="quotas"></div>
         <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">clear view</button></div>
@@ -85,7 +85,7 @@
           <span class="state-dot"><i></i><b data-role="state">offline</b></span>
         </div>
         <div class="agent-facts"><span data-role="model">model</span><span data-role="usage">0 tokens</span></div>
-        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span data-role="optional" class="badge muted" hidden>optional</span></div>
+        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span class="agent-badges"><span data-role="access" class="badge muted">access…</span><span data-role="optional" class="badge muted" hidden>optional</span></span></div>
         <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Primary worker reasoning"></select><small>next turn</small></label>
         <div class="quota-zone" data-role="quotas"></div>
         <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">clear view</button></div>
@@ -102,7 +102,7 @@
           <span class="state-dot"><i></i><b data-role="state">offline</b></span>
         </div>
         <div class="agent-facts"><span data-role="model">model</span><span data-role="usage">0 tokens</span></div>
-        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span data-role="optional" class="badge muted" hidden>optional</span></div>
+        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span class="agent-badges"><span data-role="access" class="badge muted">access…</span><span data-role="optional" class="badge muted" hidden>optional</span></span></div>
         <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Secondary worker reasoning"></select><small>next turn</small></label>
         <div class="quota-zone" data-role="quotas"></div>
         <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">clear view</button></div>
@@ -132,10 +132,10 @@
           <label><span>Delivery</span><select id="chatDelivery" aria-label="Message delivery">
             <option value="auto">Auto: chat or queue</option>
             <option value="chat">Talk now</option>
-            <option value="nudge">Nudge next turn</option>
+            <option value="nudge">Nudge next work turn</option>
           </select></label>
         </div>
-        <p id="chatHint" class="chat-hint">Direct chats are read-only. A nudge is durably attached to the participant's next model turn.</p>
+        <p id="chatHint" class="chat-hint">Direct chats are read-only. A nudge is durably attached to the participant's next operational work turn.</p>
         <div id="chatMessages" class="chat-messages"><div class="empty">Choose a participant and send a message.</div></div>
         <form id="chatForm" class="chat-form">
           <textarea id="chatInput" rows="2" placeholder="Ask, challenge a decision, or queue a steering note for the next turn."></textarea>
