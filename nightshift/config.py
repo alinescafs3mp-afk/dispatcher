@@ -4,10 +4,10 @@ import os
 import re
 import shutil
 import tomllib
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
-
+from typing import Any
 
 DEFAULT_BACKLOG_GLOBS = [
     "BACKLOG*.md",
@@ -171,11 +171,29 @@ class Settings:
         return self.agents[key]
 
     def public_dict(self) -> dict[str, Any]:
+        """Return only configuration fields required by the browser dashboard."""
         return {
             "server": asdict(self.server),
-            "project": asdict(self.project),
+            "project": {
+                "repo": self.project.repo,
+                "protected_paths": list(self.project.protected_paths),
+                "high_risk_paths": list(self.project.high_risk_paths),
+            },
             "orchestrator": asdict(self.orchestrator),
-            "agents": {key: asdict(value) for key, value in self.agents.items()},
+            "agents": {
+                key: {
+                    "id": value.id,
+                    "role": value.role,
+                    "model": value.model,
+                    "effort": value.effort,
+                    "effort_options": list(value.effort_options),
+                    "enabled": value.enabled,
+                    "timeout_seconds": value.timeout_seconds,
+                    "max_turns": value.max_turns,
+                    "unsafe_full_access": value.unsafe_full_access,
+                }
+                for key, value in self.agents.items()
+            },
             "config_path": str(self.config_path or ""),
         }
 

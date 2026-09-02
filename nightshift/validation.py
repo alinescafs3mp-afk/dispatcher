@@ -3,8 +3,9 @@ from __future__ import annotations
 import os
 import re
 import shlex
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from .config import sanitized_child_env
 from .process import ProcessRunner
@@ -33,7 +34,7 @@ def parse_validation_command(command: str, cwd: Path) -> list[str]:
         raise UnsafeValidationCommand("empty command")
     executable = args[0]
     base = os.path.basename(executable)
-    if base in _ALLOWED:
+    if executable == base and base in _ALLOWED:
         return args
     if executable.startswith("./"):
         candidate = (cwd / executable).resolve()
@@ -41,7 +42,7 @@ def parse_validation_command(command: str, cwd: Path) -> list[str]:
             candidate.relative_to(cwd.resolve())
         except ValueError as exc:
             raise UnsafeValidationCommand("local executable escapes worktree") from exc
-        if candidate.exists() and candidate.is_file():
+        if candidate.exists() and candidate.is_file() and os.access(candidate, os.X_OK):
             return args
     raise UnsafeValidationCommand(f"executable is not in validation allowlist: {executable}")
 
@@ -61,8 +62,10 @@ async def run_validation(commands: list[str], cwd: Path, runner: ProcessRunner,
             continue
         lines: list[str] = []
 
-        async def on_line(stream: str, line: str) -> None:
-            lines.append(f"[{stream}] {line}")
+        async def on_line(
+            stream: str, line: str, captured: list[str] = lines
+        ) -> None:
+            captured.append(f"[{stream}] {line}")
             await event("log", {"stream": f"validation-{stream}", "text": line})
 
         result = await runner.run(

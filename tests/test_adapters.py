@@ -15,7 +15,7 @@ def test_codex_command_new_and_resume(tmp_path: Path) -> None:
     adapter.binary = "/bin/echo"
     command = adapter._command(tmp_path, tmp_path / "last", "abc-123", False, "--json")
     assert command[:3] == ["/bin/echo", "exec", "--json"]
-    assert ["--sandbox", "workspace-write"] == command[command.index("--sandbox"):command.index("--sandbox") + 2]
+    assert command[command.index("--sandbox"):command.index("--sandbox") + 2] == ["--sandbox", "workspace-write"]
     assert command[-3:] == ["resume", "abc-123", "-"]
     assert 'model_reasoning_effort="max"' in command
 

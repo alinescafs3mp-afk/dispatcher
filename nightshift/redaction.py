@@ -7,7 +7,8 @@ that a command, repository file, model, or watcher artifact accidentally exposes
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 _MASK = "***REDACTED***"
 
@@ -76,12 +77,47 @@ def redact(text: str) -> str:
     return value
 
 
+_SENSITIVE_STRUCTURED_KEYS = frozenset({
+    "api_key",
+    "access_token",
+    "refresh_token",
+    "id_token",
+    "token",
+    "secret",
+    "client_secret",
+    "private_key",
+    "password",
+    "passwd",
+    "authorization",
+    "cookie",
+    "set_cookie",
+    "credential",
+    "credentials",
+})
+
+
+def _normalized_key(key: Any) -> str:
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(key))
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+
+def _sensitive_structured_key(key: Any) -> bool:
+    return _normalized_key(key) in _SENSITIVE_STRUCTURED_KEYS
+
+
 def redact_value(value: Any) -> Any:
-    """Recursively redact strings in JSON-compatible values."""
+    """Recursively redact strings and values stored under credential keys."""
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key)
+            if item is not None and _sensitive_structured_key(name):
+                result[name] = _MASK
+            else:
+                result[name] = redact_value(item)
+        return result
     if isinstance(value, str):
         return redact(value)
-    if isinstance(value, dict):
-        return {str(key): redact_value(item) for key, item in value.items()}
     if isinstance(value, list):
         return [redact_value(item) for item in value]
     if isinstance(value, tuple):

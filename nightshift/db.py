@@ -9,10 +9,11 @@ from typing import Any
 from .models import utc_now
 from .redaction import redact, redact_value
 
-
 _SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
+PRAGMA synchronous=NORMAL;
+PRAGMA busy_timeout=5000;
 CREATE TABLE IF NOT EXISTS missions (
     id TEXT PRIMARY KEY,
     repo TEXT NOT NULL,
@@ -158,7 +159,7 @@ class StateDB:
             return
         pairs.append(("updated_at", utc_now()))
         clause = ",".join(f"{key}=?" for key, _ in pairs)
-        self.execute(f"UPDATE agents SET {clause} WHERE id=?", tuple(value for _, value in pairs) + (agent_id,))
+        self.execute(f"UPDATE agents SET {clause} WHERE id=?", (*tuple(value for _, value in pairs), agent_id))
 
     def create_mission(self, mission_id: str, repo: str, goal: str, status: str,
                        directive_path: str = "") -> None:
@@ -183,7 +184,7 @@ class StateDB:
         pairs.append(("updated_at", utc_now()))
         clause = ",".join(f"{key}=?" for key, _ in pairs)
         self.execute(f"UPDATE missions SET {clause} WHERE id=?",
-                     tuple(value for _, value in pairs) + (mission_id,))
+                     (*tuple(value for _, value in pairs), mission_id))
 
     def create_task(self, mission_id: str, task_id: str, packet: dict[str, Any],
                     status: str, base_sha: str = "") -> None:
@@ -196,7 +197,7 @@ class StateDB:
         )
 
     def update_task(self, task_id: str, **fields: Any) -> None:
-        allowed = {"status", "base_sha", "worker_head", "attempt", "review_json", "result_json"}
+        allowed = {"status", "worker", "base_sha", "worker_head", "attempt", "review_json", "result_json"}
         pairs: list[tuple[str, Any]] = []
         for key, value in fields.items():
             if key not in allowed:
@@ -212,7 +213,7 @@ class StateDB:
         pairs.append(("updated_at", utc_now()))
         clause = ",".join(f"{key}=?" for key, _ in pairs)
         self.execute(f"UPDATE tasks SET {clause} WHERE id=?",
-                     tuple(value for _, value in pairs) + (task_id,))
+                     (*tuple(value for _, value in pairs), task_id))
 
     def add_event(self, sender: str, recipient: str, event_type: str,
                   payload: dict[str, Any], mission_id: str = "", task_id: str = "") -> int:
@@ -256,9 +257,10 @@ class StateDB:
         self.execute(
             """INSERT INTO usage(agent_id,task_id,input_tokens,cached_input_tokens,output_tokens,reasoning_tokens,created_at)
                VALUES(?,?,?,?,?,?,?)""",
-            (agent_id, task_id, int(usage.get("input_tokens", 0)),
-             int(usage.get("cached_input_tokens", 0)), int(usage.get("output_tokens", 0)),
-             int(usage.get("reasoning_tokens", 0)), utc_now()),
+            (agent_id, task_id, max(0, int(usage.get("input_tokens", 0))),
+             max(0, int(usage.get("cached_input_tokens", 0))),
+             max(0, int(usage.get("output_tokens", 0))),
+             max(0, int(usage.get("reasoning_tokens", 0))), utc_now()),
         )
 
     def snapshot(self, log_tail: int = 500) -> dict[str, Any]:

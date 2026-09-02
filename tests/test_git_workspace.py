@@ -108,6 +108,20 @@ def test_worker_discards_credential_content(git_repo: Path, tmp_path: Path) -> N
     workspace.cleanup(keep_integration=True)
 
 
+def test_worker_changed_files_preserves_newline_filename(
+    git_repo: Path, tmp_path: Path,
+) -> None:
+    settings = default_settings(str(git_repo))
+    workspace = MissionWorkspace(settings, "newline", tmp_path / "newline")
+    workspace.prepare()
+    tree = workspace.create_worker("task", "spark")
+    unusual = "odd\nname.txt"
+    (tree.path / unusual).write_text("content\n", encoding="utf-8")
+    workspace.commit_worker(tree, "unusual path")
+    assert unusual in workspace.worker_changed_files(tree)
+    workspace.cleanup(keep_integration=True)
+
+
 def test_integration_refuses_moved_head(git_repo: Path, tmp_path: Path) -> None:
     settings = default_settings(str(git_repo))
     workspace = MissionWorkspace(settings, "m6", tmp_path / "m6")

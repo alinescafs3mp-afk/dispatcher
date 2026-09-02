@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -19,6 +17,21 @@ def test_validation_rejects_shell_operators(tmp_path: Path) -> None:
 
 def test_validation_allows_known_command(tmp_path: Path) -> None:
     assert parse_validation_command("python -m compileall .", tmp_path)[:2] == ["python", "-m"]
+
+
+def test_validation_rejects_absolute_allowlisted_basename(tmp_path: Path) -> None:
+    fake_python = tmp_path / "python"
+    fake_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_python.chmod(0o755)
+    with pytest.raises(UnsafeValidationCommand):
+        parse_validation_command(str(fake_python), tmp_path)
+
+
+def test_validation_requires_local_executable_bit(tmp_path: Path) -> None:
+    script = tmp_path / "check"
+    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    with pytest.raises(UnsafeValidationCommand):
+        parse_validation_command("./check", tmp_path)
 
 
 def test_validation_local_executable_cannot_escape(tmp_path: Path) -> None:

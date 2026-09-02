@@ -5,9 +5,9 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .base import AgentAdapter, EventCallback
 from ..models import AgentResult, Usage
 from ..protocol import limit_like
+from .base import AgentAdapter, EventCallback
 
 
 def _first_text(obj: Any) -> str:
@@ -133,10 +133,7 @@ class GrokAdapter(AgentAdapter):
                 token in event_type.lower()
                 for token in ("assistant", "agent_message", "message_chunk", "result", "final")
             )
-            if text and assistant_like:
-                final_chunks.append(text)
-                await event("assistant_delta", {"text": text})
-            elif text and event_type.lower() in {"event", "output"}:
+            if (text and assistant_like) or (text and event_type.lower() in {"event", "output"}):
                 final_chunks.append(text)
                 await event("assistant_delta", {"text": text})
             else:

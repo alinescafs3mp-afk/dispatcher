@@ -6,9 +6,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .base import AgentAdapter, EventCallback
 from ..models import AgentResult, Usage
 from ..protocol import limit_like
+from .base import AgentAdapter, EventCallback
 
 
 class CodexAdapter(AgentAdapter):

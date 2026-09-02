@@ -9,7 +9,7 @@ from typing import Any
 
 from .config import AgentConfig
 from .models import QuotaSnapshot, QuotaWindow
-from .process import ProcessRunner
+from .process import SUBPROCESS_STREAM_LIMIT, ProcessRunner
 from .redaction import redact, redact_value
 
 
@@ -48,7 +48,7 @@ async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
         return
     try:
         await asyncio.wait_for(proc.wait(), timeout=3)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         try:
             proc.kill()
         except ProcessLookupError:
@@ -86,6 +86,7 @@ async def _read_codex_account_once(command: list[str], cwd: Path, timeout: int,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        limit=SUBPROCESS_STREAM_LIMIT,
     )
     assert proc.stdin is not None and proc.stdout is not None
     stderr_task = asyncio.create_task(_drain_stderr(proc.stderr))
@@ -341,6 +342,7 @@ async def _read_grok_billing_once(command: list[str], cwd: Path, timeout: int,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        limit=SUBPROCESS_STREAM_LIMIT,
     )
     assert proc.stdin is not None and proc.stdout is not None
     stderr_task = asyncio.create_task(_drain_stderr(proc.stderr))
@@ -406,7 +408,7 @@ async def _read_grok_billing_once(command: list[str], cwd: Path, timeout: int,
         })
         initialized = await receive(1)
         try:
-            data, billing_method, next_id = await billing_any(2)
+            data, billing_method, _next_id = await billing_any(2)
             return {
                 "initialize": initialized,
                 "billing": data,

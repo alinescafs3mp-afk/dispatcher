@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class AgentState(StrEnum):
@@ -87,22 +87,21 @@ class TaskPacket(BaseModel):
     context: str = ""
     source_ref: str = ""
     architectural_intent: str = ""
-    allowed_paths: list[str] = Field(default_factory=list)
-    forbidden_paths: list[str] = Field(default_factory=list)
-    acceptance_criteria: list[str] = Field(default_factory=list)
-    validation_commands: list[str] = Field(default_factory=list)
-    stop_conditions: list[str] = Field(default_factory=list)
+    allowed_paths: list[str] = Field(default_factory=list, min_length=1, max_length=64)
+    forbidden_paths: list[str] = Field(default_factory=list, max_length=64)
+    acceptance_criteria: list[str] = Field(default_factory=list, min_length=1, max_length=64)
+    validation_commands: list[str] = Field(default_factory=list, max_length=32)
+    stop_conditions: list[str] = Field(default_factory=list, max_length=32)
     risk: RiskLevel = RiskLevel.LOW
-    max_files: int | None = None
+    max_files: int | None = Field(default=None, ge=1, le=100)
 
     @field_validator("allowed_paths", "forbidden_paths", mode="before")
     @classmethod
     def normalize_paths(cls, value: Any) -> list[str]:
         if value is None:
             return []
-        if isinstance(value, str):
-            return [value]
-        return [str(item) for item in value]
+        items = [value] if isinstance(value, str) else value
+        return [str(item).strip() for item in items if str(item).strip()]
 
 
 class ArchitectDispatch(BaseModel):

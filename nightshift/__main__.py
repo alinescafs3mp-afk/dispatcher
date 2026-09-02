@@ -7,7 +7,7 @@ import os
 import shutil
 import sys
 import webbrowser
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import uvicorn
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.output:
                 output = Path(args.output).expanduser().resolve()
             else:
-                stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+                stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
                 output = settings.orchestrator.runtime_path / "manual-scans" / stamp
             output.mkdir(parents=True, exist_ok=True)
             scanner = ForensicsScanner(settings, output, orchestrator.codex_homes)
