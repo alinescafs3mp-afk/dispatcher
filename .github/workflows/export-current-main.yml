@@ -1,0 +1,23 @@
+name: export-current-main
+
+on:
+  push:
+    branches:
+      - profile-final-catchup
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Archive exact main source
+        run: git archive --format=tar.gz --output=current-main.tar.gz 7d8ab1907dfa31269dc6fc86137dcd0a5ff82756
+      - uses: actions/upload-artifact@v4
+        with:
+          name: current-main-source
+          path: current-main.tar.gz
