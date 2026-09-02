@@ -16,8 +16,12 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: pip install -e '.[dev]'
       - name: Ruff
-        run: ruff check nightshift tests
+        id: ruff
+        continue-on-error: true
+        run: ruff check nightshift tests 2>&1 | tee ruff.log
       - name: Pytest
+        id: pytest
+        continue-on-error: true
         run: pytest -q --junitxml=pytest.xml 2>&1 | tee pytest.log
       - name: Upload diagnostics
         if: always()
@@ -25,6 +29,12 @@ jobs:
         with:
           name: test-diagnostics
           path: |
+            ruff.log
             pytest.log
             pytest.xml
           if-no-files-found: ignore
+      - name: Quality gate
+        if: always()
+        run: |
+          test '${{ steps.ruff.outcome }}' = success
+          test '${{ steps.pytest.outcome }}' = success
