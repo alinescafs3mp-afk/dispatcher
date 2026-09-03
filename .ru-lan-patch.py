@@ -57,7 +57,7 @@ exec(compile(source, "<russian-lan-ui-patch>", "exec"))
 
 main_path = Path("nightshift/__main__.py")
 main_text = main_path.read_text(encoding="utf-8")
-import_marker = "import argparse\n"
+import_marker = "import asyncio\n"
 if main_text.count(import_marker) != 1:
     raise RuntimeError("unexpected __main__.py import shape")
 main_text = main_text.replace(import_marker, import_marker + "import contextlib\n", 1)
