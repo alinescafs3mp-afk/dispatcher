@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - '.legacy-reserve-fix.py'
+      - '.legacy-reserve-fix-v2.py'
       - '.github/workflows/apply-legacy-reserve-fix.yml'
 
 permissions:
@@ -31,8 +32,8 @@ jobs:
       - name: Apply reviewed legacy Reserve repair
         run: |
           set -euo pipefail
-          python .legacy-reserve-fix.py
-          rm -f .legacy-reserve-fix.py .github/workflows/apply-legacy-reserve-fix.yml
+          python .legacy-reserve-fix-v2.py
+          rm -f .legacy-reserve-fix.py .legacy-reserve-fix-v2.py .github/workflows/apply-legacy-reserve-fix.yml
           git diff --check
 
       - name: Install development dependencies
@@ -60,6 +61,7 @@ jobs:
           git add -A
           git diff --cached --check
           test ! -e .legacy-reserve-fix.py
+          test ! -e .legacy-reserve-fix-v2.py
           test ! -e .github/workflows/apply-legacy-reserve-fix.yml
           git config user.name 'OpenAI dispatcher auditor'
           git config user.email 'dispatcher-auditor@users.noreply.github.com'
