@@ -41,8 +41,15 @@ class CodexAdapter(AgentAdapter):
                 self._json_flag = "--experimental-json"
             return self._json_flag
 
-    def _command(self, cwd: Path, last_message: Path, session_id: str | None,
-                 read_only: bool, json_flag: str | None = None) -> list[str]:
+    def _command(
+        self,
+        cwd: Path,
+        last_message: Path,
+        session_id: str | None,
+        read_only: bool,
+        json_flag: str | None = None,
+        model_override: str | None = None,
+    ) -> list[str]:
         command = [
             self.binary,
             "exec",
@@ -61,8 +68,9 @@ class CodexAdapter(AgentAdapter):
             command.append("--dangerously-bypass-approvals-and-sandbox")
         else:
             command += ["--sandbox", "read-only" if read_only else "workspace-write"]
-        if self.config.model:
-            command += ["--model", self.config.model]
+        model = model_override or self.config.model
+        if model:
+            command += ["--model", model]
         if self.config.effort:
             command += ["-c", f'model_reasoning_effort="{self.config.effort}"']
         command += self.config.extra_args
@@ -71,9 +79,16 @@ class CodexAdapter(AgentAdapter):
         command += ["-"]
         return command
 
-    async def run(self, prompt: str, cwd: Path, task_id: str,
-                  session_id: str | None, event: EventCallback,
-                  read_only: bool = False) -> AgentResult:
+    async def run(
+        self,
+        prompt: str,
+        cwd: Path,
+        task_id: str,
+        session_id: str | None,
+        event: EventCallback,
+        read_only: bool = False,
+        model_override: str | None = None,
+    ) -> AgentResult:
         self.binary = self.config.resolve_binary()
         if not self.binary:
             return AgentResult(ok=False, returncode=127, error="Codex binary not found")
@@ -86,7 +101,14 @@ class CodexAdapter(AgentAdapter):
 
         with tempfile.TemporaryDirectory(prefix="nightshift-codex-") as tmp:
             last_path = Path(tmp) / "last-message.txt"
-            command = self._command(cwd, last_path, session_id, read_only, json_flag)
+            command = self._command(
+                cwd,
+                last_path,
+                session_id,
+                read_only,
+                json_flag,
+                model_override,
+            )
 
             async def on_line(stream: str, line: str) -> None:
                 nonlocal usage, final_text, observed_session, raw_events, limit_detected

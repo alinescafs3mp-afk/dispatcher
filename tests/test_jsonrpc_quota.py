@@ -26,14 +26,22 @@ async def test_codex_app_server_protocol(make_executable, tmp_path: Path) -> Non
                 elif msg.get("method") == "account/read":
                     print(json.dumps({"id": msg["id"], "result": {"account": {"type": "chatgpt"}}}), flush=True)
                 elif msg.get("method") == "account/rateLimits/read":
-                    print(json.dumps({"id": msg["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 10}}}}), flush=True)
+                    print(json.dumps({"id": msg["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 10}}, "requestParams": msg.get("params")}}), flush=True)
                 elif msg.get("method") == "model/list":
                     print(json.dumps({"id": msg["id"], "result": {"data": [{"id": "gpt-5.6-luna", "supportedReasoningEfforts": ["high", "max"]}]}}), flush=True)
             """
         ),
     )
-    payload = await read_codex_account(str(fake), tmp_path, timeout=3, env={"PATH": str(Path(fake).parent) + ":/usr/bin"})
+    payload = await read_codex_account(
+        str(fake),
+        tmp_path,
+        timeout=3,
+        env={"PATH": str(Path(fake).parent) + ":/usr/bin"},
+        supports_luna_reserve=True,
+    )
     assert payload["codex_home"] == "/tmp/codex-home"
+    assert payload["luna_reserve_requested"] is True
+    assert payload["limits"]["requestParams"]["supportsLunaReserve"] is True
     assert payload["limits"]["rateLimits"]["primary"]["usedPercent"] == 10
     assert payload["models"]["data"][0]["id"] == "gpt-5.6-luna"
 

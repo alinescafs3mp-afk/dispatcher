@@ -59,6 +59,7 @@ from .prompts import (
 )
 from .protocol import compact_text, extract_json_dict
 from .quota import (
+    LUNA_RESERVE_MODEL,
     codex_effort_options,
     normalize_codex_quota,
     normalize_grok_quota,
@@ -200,6 +201,28 @@ class NightshiftOrchestrator:
             repository=str(self.settings.project.repo_path),
             operational_roots=self.settings.project.operational_roots,
         )
+
+    def _luna_reserve_model(self, key: str) -> str | None:
+        # Only the emergency Luna lane implements the backend-authorized
+        # gpt-reserve transition. Other logical lanes keep their configured model.
+        if self.profile_id != "reserve" or key not in self.settings.agents:
+            return None
+        config = self.settings.agent(key)
+        if config.adapter != "codex" or config.physical_key != "luna":
+            return None
+        snapshot = self.quota_cache.get(key)
+        if not isinstance(snapshot, dict):
+            return None
+        raw = snapshot.get("raw")
+        if not isinstance(raw, dict):
+            return None
+        if raw.get("luna_reserve_available") is not True:
+            return None
+        blocked_model = str(raw.get("luna_reserve_blocked_model") or "")
+        if blocked_model and blocked_model != config.model:
+            return None
+        model = str(raw.get("luna_reserve_model") or LUNA_RESERVE_MODEL)
+        return model if model == LUNA_RESERVE_MODEL else None
 
     def _requested_combat_grok(self, value: bool | None) -> bool:
         return self.combat_grok_enabled if value is None else bool(value)
@@ -704,21 +727,22 @@ class NightshiftOrchestrator:
                     }
                     quota_source = "disabled"
                 elif config.adapter == "codex":
+                    prefer_luna = (
+                        self.profile_id == "reserve"
+                        and config.physical_key == "luna"
+                    )
                     try:
                         async with self.agent_locks[key]:
                             payload = await read_codex_account(
                                 config.resolve_binary(),
                                 cwd,
                                 env=config.subprocess_env(),
+                                supports_luna_reserve=prefer_luna,
                             )
                         snapshot = normalize_codex_quota(config.id, payload)
                         home = str(payload.get("codex_home") or "")
                         if home:
                             self.codex_homes[key] = home
-                        prefer_luna = (
-                            self.profile_id == "reserve"
-                            and config.physical_key == "luna"
-                        )
                         if config.model or prefer_luna:
                             options, matched_model = codex_effort_options(
                                 payload,
@@ -1736,14 +1760,43 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                 profile_id=self.profile_id,
             )
             prompt = self._profile_context() + "\n\n" + prompt
+            model_override = self._luna_reserve_model(active_worker)
             async with self.agent_locks[active_worker]:
                 prompt, note_seqs = self._prepare_operator_notes(active_worker, prompt)
                 await self._set_agent(active_worker, AgentState.WORKING, current_task=task_id)
-                try:
-                    result = await self.adapters[active_worker].run(
-                        prompt, tree.path, task_id, None,
-                        self._callback(active_worker, task_id), read_only=False,
+                if model_override:
+                    await self._emit(
+                        "agent.model_routed",
+                        {
+                            "key": active_worker,
+                            "configured_model": self.settings.agent(active_worker).model,
+                            "effective_model": model_override,
+                            "reason": "ordinary Codex usage is blocked; Luna Reserve is available",
+                        },
+                        sender=self.settings.agent(active_worker).id,
+                        task_id=task_id,
                     )
+                try:
+                    adapter = self.adapters[active_worker]
+                    if isinstance(adapter, CodexAdapter):
+                        result = await adapter.run(
+                            prompt,
+                            tree.path,
+                            task_id,
+                            None,
+                            self._callback(active_worker, task_id),
+                            read_only=False,
+                            model_override=model_override,
+                        )
+                    else:
+                        result = await adapter.run(
+                            prompt,
+                            tree.path,
+                            task_id,
+                            None,
+                            self._callback(active_worker, task_id),
+                            read_only=False,
+                        )
                 except asyncio.CancelledError:
                     await self._set_agent(
                         active_worker, AgentState.STOPPED, error="Worker turn cancelled"
@@ -1784,15 +1837,69 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                                 result_json=result.model_dump(mode="json"))
 
             if result.limit_detected:
-                fallback = self._fallback_worker(active_worker, packet)
-                await self._emit("task.worker_limited", {
-                    "worker": active_worker, "fallback": fallback,
-                    "worker_head": worker_head, "error": result.error,
-                }, task_id=task_id)
+                reserve_retry = False
+                reserve_refresh_error = ""
+                if (
+                    active_worker == "luna"
+                    and model_override != LUNA_RESERVE_MODEL
+                    and self.profile_id == "reserve"
+                    and self.settings.agent(active_worker).adapter == "codex"
+                ):
+                    try:
+                        await self.refresh_quotas()
+                    except Exception as exc:
+                        reserve_refresh_error = f"{type(exc).__name__}: {exc}"
+                        await self._emit(
+                            "agent.quota_refresh_error",
+                            {
+                                "key": active_worker,
+                                "error": reserve_refresh_error,
+                                "phase": "luna-reserve-retry",
+                            },
+                            sender=self.settings.agent(active_worker).id,
+                            task_id=task_id,
+                        )
+                    reserve_retry = (
+                        self._luna_reserve_model(active_worker)
+                        == LUNA_RESERVE_MODEL
+                    )
+                fallback = (
+                    active_worker
+                    if reserve_retry
+                    else self._fallback_worker(active_worker, packet)
+                )
+                await self._emit(
+                    "task.worker_limited",
+                    {
+                        "worker": active_worker,
+                        "fallback": fallback,
+                        "worker_head": worker_head,
+                        "error": result.error,
+                        "attempted_model": (
+                            model_override
+                            or self.settings.agent(active_worker).model
+                        ),
+                        "reserve_retry": reserve_retry,
+                        "quota_refresh_error": reserve_refresh_error,
+                    },
+                    task_id=task_id,
+                )
                 if fallback and attempt <= self.settings.orchestrator.max_revisions:
+                    if reserve_retry:
+                        reason = (
+                            f"{active_worker} exhausted ordinary Codex usage; "
+                            "retrying through backend-authorized Luna Reserve"
+                        )
+                    else:
+                        reason = (
+                            f"{active_worker} hit its quota or rollout limit"
+                        )
                     revision_context = {
-                        "reason": f"{active_worker} hit its quota or rollout limit",
-                        "instruction": "Inspect and salvage the existing partial diff in this same worktree, then complete the original packet.",
+                        "reason": reason,
+                        "instruction": (
+                            "Inspect and salvage the existing partial diff in this same "
+                            "worktree, then complete the original packet."
+                        ),
                         "previous_error": result.error,
                     }
                     active_worker = fallback

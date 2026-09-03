@@ -22,6 +22,10 @@ class GrokACPError(RuntimeError):
     pass
 
 
+LUNA_RESERVE_MODEL = "gpt-reserve"
+LUNA_RESERVE_BANNER = "luna_reserve"
+
+
 async def _drain_stderr(stream: asyncio.StreamReader | None) -> str:
     if stream is None:
         return ""
@@ -61,8 +65,14 @@ async def _terminate_process(proc: asyncio.subprocess.Process) -> None:
 # Codex app-server: account quota and model capability discovery
 
 
-async def read_codex_account(binary: str, cwd: Path, timeout: int = 30,
-                             env: dict[str, str] | None = None) -> dict[str, Any]:
+async def read_codex_account(
+    binary: str,
+    cwd: Path,
+    timeout: int = 30,
+    env: dict[str, str] | None = None,
+    *,
+    supports_luna_reserve: bool = False,
+) -> dict[str, Any]:
     if not binary:
         raise CodexAppServerError("Codex binary not found")
     variants = [
@@ -72,14 +82,26 @@ async def read_codex_account(binary: str, cwd: Path, timeout: int = 30,
     last_error = ""
     for command in variants:
         try:
-            return await _read_codex_account_once(command, cwd, timeout, env)
+            return await _read_codex_account_once(
+                command,
+                cwd,
+                timeout,
+                env,
+                supports_luna_reserve=supports_luna_reserve,
+            )
         except Exception as exc:  # compatibility fallback for older/newer CLI surfaces
             last_error = redact(str(exc))
     raise CodexAppServerError(last_error or "Codex app-server failed")
 
 
-async def _read_codex_account_once(command: list[str], cwd: Path, timeout: int,
-                                   env: dict[str, str] | None = None) -> dict[str, Any]:
+async def _read_codex_account_once(
+    command: list[str],
+    cwd: Path,
+    timeout: int,
+    env: dict[str, str] | None = None,
+    *,
+    supports_luna_reserve: bool = False,
+) -> dict[str, Any]:
     proc = await asyncio.create_subprocess_exec(
         *command,
         cwd=str(cwd),
@@ -138,7 +160,16 @@ async def _read_codex_account_once(command: list[str], cwd: Path, timeout: int,
         # fail nondeterministically under real Codex notifications.
         await send({"method": "account/read", "id": 2, "params": {}})
         account = await receive_id(2)
-        await send({"method": "account/rateLimits/read", "id": 3, "params": {}})
+        rate_limit_params = (
+            {"supportsLunaReserve": True}
+            if supports_luna_reserve
+            else {}
+        )
+        await send({
+            "method": "account/rateLimits/read",
+            "id": 3,
+            "params": rate_limit_params,
+        })
         limits = await receive_id(3)
 
         models: dict[str, Any] = {}
@@ -159,6 +190,7 @@ async def _read_codex_account_once(command: list[str], cwd: Path, timeout: int,
             "limits": limits,
             "models": models,
             "codex_home": initialized.get("codexHome", ""),
+            "luna_reserve_requested": supports_luna_reserve,
         }
     finally:
         await _terminate_process(proc)
@@ -256,6 +288,20 @@ def normalize_codex_quota(agent_id: str, payload: dict[str, Any]) -> QuotaSnapsh
     limits_result = payload.get("limits") or {}
     root = limits_result.get("rateLimits") or limits_result
     by_id = limits_result.get("rateLimitsByLimitId") or {}
+    ordinary_usage_allowed = limits_result.get("ordinaryUsageAllowed")
+    if not isinstance(ordinary_usage_allowed, bool):
+        ordinary_usage_allowed = None
+    upsell = limits_result.get("rateLimitUpsell")
+    upsell = upsell if isinstance(upsell, dict) else {}
+    banner_type = str(
+        upsell.get("banner_type") or upsell.get("bannerType") or ""
+    )
+    banner_blocked_model = str(
+        upsell.get("blocked_model_slug")
+        or upsell.get("blockedModelSlug")
+        or ""
+    )
+
     entries: list[tuple[str, dict[str, Any]]] = []
     if isinstance(by_id, dict) and by_id:
         for limit_id, value in by_id.items():
@@ -268,18 +314,33 @@ def normalize_codex_quota(agent_id: str, payload: dict[str, Any]) -> QuotaSnapsh
 
     windows: list[QuotaWindow] = []
     seen: set[tuple[str, str, int | None]] = set()
+    reserve_limit_ids: list[str] = []
+    reserve_normal_model = ""
+    reserve_has_windows = False
+    reserve_has_capacity = False
     plan_type = ""
     reached_type = None
     for limit_id, value in entries:
         plan_type = plan_type or str(value.get("planType") or "")
         reached_type = reached_type or value.get("rateLimitReachedType")
         name = str(value.get("limitName") or "")
+        is_reserve = name.casefold() == LUNA_RESERVE_MODEL
+        if is_reserve:
+            reserve_limit_ids.append(limit_id)
+            reserve_normal_model = reserve_normal_model or str(
+                value.get("normalModelSlug") or ""
+            )
         for suffix in ("primary", "secondary"):
             window = value.get(suffix)
             if not isinstance(window, dict):
                 continue
             used = window.get("usedPercent")
             used_float = float(used) if used is not None else None
+            left_percent = (
+                max(0.0, 100.0 - used_float)
+                if used_float is not None
+                else None
+            )
             resets_at, reset_text = _format_epoch(window.get("resetsAt"))
             key = (limit_id, suffix, resets_at)
             if key in seen:
@@ -289,13 +350,26 @@ def normalize_codex_quota(agent_id: str, payload: dict[str, Any]) -> QuotaSnapsh
                 id=f"{limit_id}:{suffix}",
                 label=_window_label(limit_id, name, window, suffix),
                 used_percent=used_float,
-                left_percent=max(0.0, 100.0 - used_float) if used_float is not None else None,
+                left_percent=left_percent,
                 window_minutes=int(window.get("windowDurationMins"))
                 if window.get("windowDurationMins") else None,
                 resets_at=resets_at,
                 resets_at_text=reset_text,
                 source="codex app-server",
             ))
+            if is_reserve:
+                reserve_has_windows = True
+                reserve_has_capacity |= (
+                    left_percent is not None and left_percent > 0
+                )
+
+    reserve_banner = banner_type.casefold() == LUNA_RESERVE_BANNER
+    reserve_exposed = bool(reserve_limit_ids or reserve_banner)
+    reserve_available = reserve_banner or (
+        ordinary_usage_allowed is False
+        and reserve_has_windows
+        and reserve_has_capacity
+    )
     account = payload.get("account") or {}
     return QuotaSnapshot(
         agent_id=agent_id,
@@ -308,6 +382,15 @@ def normalize_codex_quota(agent_id: str, payload: dict[str, Any]) -> QuotaSnapsh
         raw={
             "codex_home": payload.get("codex_home", ""),
             "model_count": len((payload.get("models") or {}).get("data") or []),
+            "ordinary_usage_allowed": ordinary_usage_allowed,
+            "luna_reserve_requested": bool(payload.get("luna_reserve_requested")),
+            "luna_reserve_exposed": reserve_exposed,
+            "luna_reserve_available": reserve_available,
+            "luna_reserve_model": LUNA_RESERVE_MODEL if reserve_exposed else "",
+            "luna_reserve_normal_model": reserve_normal_model,
+            "luna_reserve_limit_ids": reserve_limit_ids,
+            "rate_limit_upsell_type": banner_type,
+            "luna_reserve_blocked_model": banner_blocked_model,
         },
     )
 

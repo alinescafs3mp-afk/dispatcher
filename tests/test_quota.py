@@ -41,6 +41,68 @@ def test_codex_multi_bucket_quota() -> None:
     assert "Weekly" in by_id["gpt-reserve:secondary"].label
 
 
+def test_codex_luna_reserve_metadata() -> None:
+    payload = {
+        "luna_reserve_requested": True,
+        "limits": {
+            "ordinaryUsageAllowed": False,
+            "rateLimits": {
+                "limitId": "codex",
+                "rateLimitReachedType": "rate_limit_reached",
+                "primary": {"usedPercent": 100, "windowDurationMins": 10080},
+            },
+            "rateLimitsByLimitId": {
+                "base_model_inference": {
+                    "limitId": "base_model_inference",
+                    "limitName": "gpt-reserve",
+                    "normalModelSlug": "gpt-5.6-luna",
+                    "primary": {"usedPercent": 25, "windowDurationMins": 300},
+                    "secondary": {"usedPercent": 60, "windowDurationMins": 10080},
+                },
+            },
+            "rateLimitUpsell": {
+                "banner_type": "luna_reserve",
+                "blocked_model_slug": "gpt-5.6-luna",
+            },
+        },
+        "models": {"data": []},
+    }
+    snapshot = normalize_codex_quota("luna", payload)
+    assert snapshot.raw["ordinary_usage_allowed"] is False
+    assert snapshot.raw["luna_reserve_requested"] is True
+    assert snapshot.raw["luna_reserve_exposed"] is True
+    assert snapshot.raw["luna_reserve_available"] is True
+    assert snapshot.raw["luna_reserve_model"] == "gpt-reserve"
+    assert snapshot.raw["luna_reserve_normal_model"] == "gpt-5.6-luna"
+    assert snapshot.raw["luna_reserve_limit_ids"] == ["base_model_inference"]
+    assert snapshot.raw["luna_reserve_blocked_model"] == "gpt-5.6-luna"
+    assert any(window.label.startswith("gpt-reserve") for window in snapshot.windows)
+
+
+def test_codex_luna_reserve_is_not_inferred_from_percentages() -> None:
+    payload = {
+        "luna_reserve_requested": True,
+        "limits": {
+            "ordinaryUsageAllowed": None,
+            "rateLimits": {
+                "limitId": "codex",
+                "rateLimitReachedType": "rate_limit_reached",
+                "primary": {"usedPercent": 100, "windowDurationMins": 10080},
+            },
+            "rateLimitsByLimitId": {
+                "base_model_inference": {
+                    "limitId": "base_model_inference",
+                    "limitName": "gpt-reserve",
+                    "primary": {"usedPercent": 0, "windowDurationMins": 10080},
+                },
+            },
+        },
+    }
+    snapshot = normalize_codex_quota("luna", payload)
+    assert snapshot.raw["luna_reserve_exposed"] is True
+    assert snapshot.raw["luna_reserve_available"] is False
+
+
 def test_codex_effort_options_exact_model() -> None:
     payload = {
         "models": {

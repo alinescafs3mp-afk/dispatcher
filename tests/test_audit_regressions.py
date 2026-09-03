@@ -341,6 +341,41 @@ async def test_resume_uses_the_missions_own_architect_session(
 
 
 @pytest.mark.asyncio
+async def test_luna_reserve_route_requires_backend_authorization(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    orchestrator = NightshiftOrchestrator(make_settings(git_repo, tmp_path))
+    try:
+        orchestrator.quota_cache["luna"] = {
+            "raw": {
+                "luna_reserve_available": True,
+                "luna_reserve_model": "gpt-reserve",
+            }
+        }
+        assert orchestrator._luna_reserve_model("luna") == "gpt-reserve"
+        assert orchestrator._luna_reserve_model("spark") is None
+
+        orchestrator.quota_cache["luna"]["raw"]["luna_reserve_blocked_model"] = "other"
+        assert orchestrator._luna_reserve_model("luna") is None
+        orchestrator.quota_cache["luna"]["raw"].pop("luna_reserve_blocked_model")
+
+        orchestrator.quota_cache["luna"]["raw"]["luna_reserve_available"] = False
+        assert orchestrator._luna_reserve_model("luna") is None
+
+        await orchestrator.set_profile("combat", combat_grok_enabled=True)
+        orchestrator.quota_cache["luna"] = {
+            "raw": {
+                "luna_reserve_available": True,
+                "luna_reserve_model": "gpt-reserve",
+            }
+        }
+        assert orchestrator._luna_reserve_model("luna") is None
+    finally:
+        await orchestrator.close()
+
+
+@pytest.mark.asyncio
 async def test_fallback_worker_respects_scope_width(
     git_repo: Path,
     tmp_path: Path,

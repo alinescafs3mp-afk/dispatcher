@@ -26,6 +26,24 @@ def test_codex_command_new_and_resume(tmp_path: Path) -> None:
     assert 'model_reasoning_effort="max"' in command
 
 
+def test_codex_command_can_route_through_luna_reserve(tmp_path: Path) -> None:
+    config = default_settings().agent("luna")
+    config.binary_candidates = ["/bin/echo"]
+    adapter = CodexAdapter(config, ProcessRunner())
+    adapter.binary = "/bin/echo"
+    command = adapter._command(
+        tmp_path,
+        tmp_path / "last",
+        None,
+        False,
+        "--json",
+        "gpt-reserve",
+    )
+    model_index = command.index("--model")
+    assert command[model_index + 1] == "gpt-reserve"
+    assert config.model not in command[model_index + 1:model_index + 2]
+
+
 def test_codex_read_only_and_no_api_bypass(tmp_path: Path) -> None:
     config = default_settings().agent("spark")
     config.binary_candidates = ["/bin/echo"]
