@@ -136,9 +136,9 @@ async def _read_codex_account_once(command: list[str], cwd: Path, timeout: int,
         # Read responses with exactly one stdout consumer. Multiple concurrent
         # StreamReader.readline() calls are invalid and used to make quota refresh
         # fail nondeterministically under real Codex notifications.
-        await send({"method": "account/read", "id": 2})
+        await send({"method": "account/read", "id": 2, "params": {}})
         account = await receive_id(2)
-        await send({"method": "account/rateLimits/read", "id": 3})
+        await send({"method": "account/rateLimits/read", "id": 3, "params": {}})
         limits = await receive_id(3)
 
         models: dict[str, Any] = {}
@@ -483,6 +483,12 @@ def normalize_grok_quota(agent_id: str, payload: dict[str, Any]) -> QuotaSnapsho
             used = max(0.0, min(100.0, legacy_used * 100.0 / monthly_limit))
 
     period = config.get("currentPeriod") if isinstance(config.get("currentPeriod"), dict) else {}
+    if used is None and period:
+        # Grok's credits backend uses proto3 JSON. A scalar percentage of zero
+        # may therefore be omitted while the current usage period is still
+        # present. Match the official pager: this is an available 0% window,
+        # not a failed billing read.
+        used = 0.0
     period_type = str(period.get("type") or "")
     if "WEEKLY" in period_type.upper():
         label = "Grok weekly credits"

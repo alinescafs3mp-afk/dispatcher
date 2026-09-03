@@ -92,6 +92,29 @@ def test_grok_weekly_billing() -> None:
     assert snapshot.account["prepaid_balance_cents"] == 500
 
 
+def test_grok_proto3_omitted_zero_percentage() -> None:
+    payload = {
+        "billing": {
+            "config": {
+                "currentPeriod": {
+                    "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                    "start": "2026-09-01T00:00:00Z",
+                    "end": "2026-09-08T00:00:00Z",
+                },
+                "prepaidBalance": {},
+                "isUnifiedBillingUser": True,
+            }
+        }
+    }
+    snapshot = normalize_grok_quota("grok", payload)
+    assert snapshot.available
+    assert snapshot.message == ""
+    assert snapshot.windows[0].used_percent == 0
+    assert snapshot.windows[0].left_percent == 100
+    assert snapshot.windows[0].window_minutes == 10080
+    assert snapshot.account["prepaid_balance_cents"] == 0
+
+
 def test_grok_legacy_billing() -> None:
     payload = {"billing": {"config": {"monthlyLimit": {"val": 1000}, "used": {"val": 250}}}}
     snapshot = normalize_grok_quota("grok", payload)

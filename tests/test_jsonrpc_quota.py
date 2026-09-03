@@ -18,6 +18,9 @@ async def test_codex_app_server_protocol(make_executable, tmp_path: Path) -> Non
             import json, os, sys
             for line in sys.stdin:
                 msg = json.loads(line)
+                if msg.get("method") in {"account/read", "account/rateLimits/read"} and "params" not in msg:
+                    print(json.dumps({"id": msg["id"], "error": {"code": -32600, "message": "Invalid request: missing field `params`"}}), flush=True)
+                    continue
                 if msg.get("method") == "initialize":
                     print(json.dumps({"id": msg["id"], "result": {"codexHome": "/tmp/codex-home"}}), flush=True)
                 elif msg.get("method") == "account/read":
