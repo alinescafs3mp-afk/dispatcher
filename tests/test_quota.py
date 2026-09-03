@@ -43,7 +43,9 @@ def test_codex_multi_bucket_quota() -> None:
 
 def test_codex_luna_reserve_metadata() -> None:
     payload = {
+        "luna_reserve_request_intent": True,
         "luna_reserve_requested": True,
+        "luna_reserve_capability_supported": True,
         "limits": {
             "ordinaryUsageAllowed": False,
             "rateLimits": {
@@ -64,12 +66,17 @@ def test_codex_luna_reserve_metadata() -> None:
                 "banner_type": "luna_reserve",
                 "blocked_model_slug": "gpt-5.6-luna",
             },
+            "rateLimitResetCredits": {"availableCount": 2},
         },
         "models": {"data": []},
     }
     snapshot = normalize_codex_quota("luna", payload)
     assert snapshot.raw["ordinary_usage_allowed"] is False
+    assert snapshot.raw["luna_reserve_request_intent"] is True
     assert snapshot.raw["luna_reserve_requested"] is True
+    assert snapshot.raw["luna_reserve_capability_supported"] is True
+    assert snapshot.raw["luna_reserve_status"] == "available"
+    assert snapshot.raw["rate_limit_reset_credits_available"] == 2
     assert snapshot.raw["luna_reserve_exposed"] is True
     assert snapshot.raw["luna_reserve_available"] is True
     assert snapshot.raw["luna_reserve_model"] == "gpt-reserve"
@@ -81,7 +88,9 @@ def test_codex_luna_reserve_metadata() -> None:
 
 def test_codex_luna_reserve_is_not_inferred_from_percentages() -> None:
     payload = {
+        "luna_reserve_request_intent": True,
         "luna_reserve_requested": True,
+        "luna_reserve_capability_supported": True,
         "limits": {
             "ordinaryUsageAllowed": None,
             "rateLimits": {
@@ -101,6 +110,57 @@ def test_codex_luna_reserve_is_not_inferred_from_percentages() -> None:
     snapshot = normalize_codex_quota("luna", payload)
     assert snapshot.raw["luna_reserve_exposed"] is True
     assert snapshot.raw["luna_reserve_available"] is False
+    assert snapshot.raw["luna_reserve_status"] == "exposed_not_authorized"
+
+
+def test_codex_legacy_app_server_reports_truthful_reserve_status() -> None:
+    payload = {
+        "luna_reserve_request_intent": True,
+        "luna_reserve_requested": False,
+        "luna_reserve_capability_supported": False,
+        "limits": {
+            "rateLimits": {
+                "limitId": "codex",
+                "planType": "pro",
+                "primary": {"usedPercent": 99, "windowDurationMins": 10080},
+            },
+            "rateLimitResetCredits": {"availableCount": 3},
+        },
+    }
+    snapshot = normalize_codex_quota("luna", payload)
+    assert snapshot.available
+    assert snapshot.raw["luna_reserve_status"] == "legacy_app_server"
+    assert snapshot.raw["luna_reserve_request_intent"] is True
+    assert snapshot.raw["luna_reserve_requested"] is False
+    assert snapshot.raw["luna_reserve_capability_supported"] is False
+    assert snapshot.raw["luna_reserve_exposed"] is False
+    assert snapshot.raw["luna_reserve_available"] is False
+    assert snapshot.raw["rate_limit_reset_credits_available"] == 3
+
+
+def test_spark_bucket_is_not_luna_reserve() -> None:
+    payload = {
+        "limits": {
+            "ordinaryUsageAllowed": False,
+            "rateLimits": {
+                "limitId": "codex",
+                "primary": {"usedPercent": 100, "windowDurationMins": 10080},
+            },
+            "rateLimitsByLimitId": {
+                "codex_bengalfox": {
+                    "limitId": "codex_bengalfox",
+                    "limitName": "GPT-5.3-Codex-Spark",
+                    "primary": {"usedPercent": 0, "windowDurationMins": 300},
+                    "secondary": {"usedPercent": 0, "windowDurationMins": 10080},
+                }
+            },
+        }
+    }
+    snapshot = normalize_codex_quota("spark", payload)
+    assert snapshot.raw["luna_reserve_exposed"] is False
+    assert snapshot.raw["luna_reserve_available"] is False
+    assert snapshot.raw["luna_reserve_status"] == "not_requested"
+    assert any("Spark" in window.label for window in snapshot.windows)
 
 
 def test_codex_effort_options_exact_model() -> None:

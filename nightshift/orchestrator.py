@@ -224,6 +224,52 @@ class NightshiftOrchestrator:
         model = str(raw.get("luna_reserve_model") or LUNA_RESERVE_MODEL)
         return model if model == LUNA_RESERVE_MODEL else None
 
+    async def _run_lane_adapter(
+        self,
+        key: str,
+        prompt: str,
+        cwd: Path,
+        task_id: str,
+        session_id: str | None,
+        *,
+        read_only: bool,
+        surface: str,
+    ) -> AgentResult:
+        """Run one logical lane with any backend-authorized Reserve route."""
+        adapter = self.adapters[key]
+        model_override = self._luna_reserve_model(key)
+        if model_override:
+            await self._emit(
+                "agent.model_routed",
+                {
+                    "key": key,
+                    "configured_model": self.settings.agent(key).model,
+                    "effective_model": model_override,
+                    "reason": "backend-authorized Luna Reserve is active",
+                    "surface": surface,
+                },
+                sender=self.settings.agent(key).id,
+                task_id=task_id,
+            )
+        if isinstance(adapter, CodexAdapter):
+            return await adapter.run(
+                prompt,
+                cwd,
+                task_id,
+                session_id,
+                self._callback(key, task_id),
+                read_only=read_only,
+                model_override=model_override,
+            )
+        return await adapter.run(
+            prompt,
+            cwd,
+            task_id,
+            session_id,
+            self._callback(key, task_id),
+            read_only=read_only,
+        )
+
     def _requested_combat_grok(self, value: bool | None) -> bool:
         return self.combat_grok_enabled if value is None else bool(value)
 
@@ -1261,13 +1307,14 @@ class NightshiftOrchestrator:
                     saved if isinstance(saved, str) and saved else None
                 )
             try:
-                result = await self.adapters[key].run(
+                result = await self._run_lane_adapter(
+                    key,
                     prompt,
                     cwd,
                     task_label,
                     self._chat_session_ids[session_key],
-                    self._callback(key, task_label),
                     read_only=True,
+                    surface="direct-chat",
                 )
             except asyncio.CancelledError:
                 await self._set_agent(
@@ -1541,15 +1588,16 @@ class NightshiftOrchestrator:
                     ),
                 )
                 try:
-                    result = await self.adapters[key].run(
+                    result = await self._run_lane_adapter(
+                        key,
                         prompt,
                         self.workspace.integration_path
                         if self.workspace
                         else self.settings.project.repo_path,
                         f"recovery-{key}",
                         session_id,
-                        self._callback(key, f"recovery-{key}"),
                         read_only=True,
+                        surface="predecessor-recovery",
                     )
                 except asyncio.CancelledError:
                     await self._set_agent(
@@ -1772,6 +1820,7 @@ Repeat the decision only. End with exactly one valid `<SOL_LINK_JSON>` object ma
                             "configured_model": self.settings.agent(active_worker).model,
                             "effective_model": model_override,
                             "reason": "ordinary Codex usage is blocked; Luna Reserve is available",
+                            "surface": "worker",
                         },
                         sender=self.settings.agent(active_worker).id,
                         task_id=task_id,

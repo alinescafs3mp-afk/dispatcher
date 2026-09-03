@@ -324,6 +324,69 @@ async def test_profile_cannot_change_while_mission_task_is_alive(
         await orch.close()
 
 
+class ReserveRecordingCodexAdapter(CodexAdapter):
+    def __init__(self, config) -> None:
+        super().__init__(config, ProcessRunner())
+        self.model_overrides: list[str | None] = []
+
+    async def run(
+        self,
+        prompt: str,
+        cwd: Path,
+        task_id: str,
+        session_id: str | None,
+        event,
+        read_only: bool = False,
+        model_override: str | None = None,
+    ) -> AgentResult:
+        self.model_overrides.append(model_override)
+        return AgentResult(
+            ok=True,
+            final_text="Luna Reserve acknowledges the operator.",
+            session_id="reserve-chat",
+        )
+
+
+@pytest.mark.asyncio
+async def test_luna_reserve_routes_direct_chat_and_never_routes_spark(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    orch = NightshiftOrchestrator(make_settings(git_repo, tmp_path))
+    fake = ReserveRecordingCodexAdapter(orch.settings.agent("luna"))
+    orch.adapters["luna"] = fake
+    try:
+        orch.quota_cache["luna"] = {
+            "raw": {
+                "luna_reserve_available": True,
+                "luna_reserve_model": "gpt-reserve",
+                "luna_reserve_blocked_model": "gpt-5.6-luna",
+            }
+        }
+        response = await orch.chat(
+            "Report the current fallback state.",
+            recipient="luna",
+            delivery="chat",
+        )
+        assert response["status"] == "answered"
+        assert fake.model_overrides == ["gpt-reserve"]
+        routed = orch.db.query(
+            "SELECT payload_json FROM events WHERE type='agent.model_routed'"
+        )
+        assert routed
+        assert '"surface": "direct-chat"' in routed[-1]["payload_json"]
+
+        orch.quota_cache["spark"] = {
+            "raw": {
+                "luna_reserve_available": True,
+                "luna_reserve_model": "gpt-reserve",
+            }
+        }
+        assert orch._luna_reserve_model("spark") is None
+    finally:
+        await orch.close()
+
+
 class ChatAdapter:
     binary = "fake-chat"
 

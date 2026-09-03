@@ -26,6 +26,25 @@ LUNA_RESERVE_MODEL = "gpt-reserve"
 LUNA_RESERVE_BANNER = "luna_reserve"
 
 
+def _legacy_rate_limit_params_error(exc: Exception) -> bool:
+    """Return whether an app-server rejected the modern capability object.
+
+    Codex 0.151-0.153 deserialize `account/rateLimits/read.params` as Rust unit.
+    Their JSON-RPC error is stable enough to negotiate a legacy `null` retry, but
+    unrelated invalid-request errors must still fail closed.
+    """
+    text = str(exc)
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        payload = {}
+    code = payload.get("code") if isinstance(payload, dict) else None
+    if code in {-32600, -32602}:
+        return True
+    lowered = text.casefold()
+    return "invalid type: map, expected unit" in lowered
+
+
 async def _drain_stderr(stream: asyncio.StreamReader | None) -> str:
     if stream is None:
         return ""
@@ -160,37 +179,66 @@ async def _read_codex_account_once(
         # fail nondeterministically under real Codex notifications.
         await send({"method": "account/read", "id": 2, "params": {}})
         account = await receive_id(2)
-        rate_limit_params = (
-            {"supportsLunaReserve": True}
-            if supports_luna_reserve
-            else {}
-        )
-        await send({
-            "method": "account/rateLimits/read",
-            "id": 3,
-            "params": rate_limit_params,
-        })
-        limits = await receive_id(3)
+        rate_limit_request_id = 3
+        luna_reserve_capability_supported: bool | None = None
+        if supports_luna_reserve:
+            await send({
+                "method": "account/rateLimits/read",
+                "id": rate_limit_request_id,
+                "params": {"supportsLunaReserve": True},
+            })
+            try:
+                limits = await receive_id(rate_limit_request_id)
+                luna_reserve_capability_supported = True
+            except CodexAppServerError as exc:
+                if not _legacy_rate_limit_params_error(exc):
+                    raise
+                # Stable Codex 0.151-0.153 accept a present JSON null here, not
+                # an object and not an omitted field. Retrying preserves ordinary
+                # quota visibility but cannot opt that old app-server into Reserve.
+                rate_limit_request_id += 1
+                await send({
+                    "method": "account/rateLimits/read",
+                    "id": rate_limit_request_id,
+                    "params": None,
+                })
+                limits = await receive_id(rate_limit_request_id)
+                luna_reserve_capability_supported = False
+        else:
+            # Use the shape accepted by both legacy unit params and current
+            # NullableGetAccountRateLimitsParams without exposing other lanes.
+            await send({
+                "method": "account/rateLimits/read",
+                "id": rate_limit_request_id,
+                "params": None,
+            })
+            limits = await receive_id(rate_limit_request_id)
 
         models: dict[str, Any] = {}
+        model_request_id = rate_limit_request_id + 1
         try:
             await send({
                 "method": "model/list",
-                "id": 4,
+                "id": model_request_id,
                 "params": {"limit": 200, "includeHidden": True},
             })
-            models = await receive_id(4)
+            models = await receive_id(model_request_id)
         except CodexAppServerError:
             # Model capability discovery is useful for the reasoning picker but
             # must never hide an otherwise valid quota snapshot.
             models = {}
+        reserve_requested = bool(
+            supports_luna_reserve and luna_reserve_capability_supported is True
+        )
         return {
             "initialize": initialized,
             "account": account,
             "limits": limits,
             "models": models,
             "codex_home": initialized.get("codexHome", ""),
-            "luna_reserve_requested": supports_luna_reserve,
+            "luna_reserve_request_intent": supports_luna_reserve,
+            "luna_reserve_requested": reserve_requested,
+            "luna_reserve_capability_supported": luna_reserve_capability_supported,
         }
     finally:
         await _terminate_process(proc)
@@ -288,6 +336,20 @@ def normalize_codex_quota(agent_id: str, payload: dict[str, Any]) -> QuotaSnapsh
     limits_result = payload.get("limits") or {}
     root = limits_result.get("rateLimits") or limits_result
     by_id = limits_result.get("rateLimitsByLimitId") or {}
+    reset_credits = limits_result.get("rateLimitResetCredits")
+    reset_credits = reset_credits if isinstance(reset_credits, dict) else {}
+    try:
+        reset_credit_count = int(reset_credits.get("availableCount") or 0)
+    except (TypeError, ValueError):
+        reset_credit_count = 0
+    reserve_request_intent = bool(
+        payload.get("luna_reserve_request_intent")
+        or payload.get("luna_reserve_requested")
+    )
+    reserve_requested = bool(payload.get("luna_reserve_requested"))
+    reserve_capability_supported = payload.get("luna_reserve_capability_supported")
+    if not isinstance(reserve_capability_supported, bool):
+        reserve_capability_supported = None
     ordinary_usage_allowed = limits_result.get("ordinaryUsageAllowed")
     if not isinstance(ordinary_usage_allowed, bool):
         ordinary_usage_allowed = None
@@ -370,6 +432,16 @@ def normalize_codex_quota(agent_id: str, payload: dict[str, Any]) -> QuotaSnapsh
         and reserve_has_windows
         and reserve_has_capacity
     )
+    if reserve_available:
+        reserve_status = "available"
+    elif reserve_exposed:
+        reserve_status = "exposed_not_authorized"
+    elif reserve_request_intent and reserve_capability_supported is False:
+        reserve_status = "legacy_app_server"
+    elif reserve_requested:
+        reserve_status = "requested_not_exposed"
+    else:
+        reserve_status = "not_requested"
     account = payload.get("account") or {}
     return QuotaSnapshot(
         agent_id=agent_id,
@@ -383,9 +455,13 @@ def normalize_codex_quota(agent_id: str, payload: dict[str, Any]) -> QuotaSnapsh
             "codex_home": payload.get("codex_home", ""),
             "model_count": len((payload.get("models") or {}).get("data") or []),
             "ordinary_usage_allowed": ordinary_usage_allowed,
-            "luna_reserve_requested": bool(payload.get("luna_reserve_requested")),
+            "luna_reserve_request_intent": reserve_request_intent,
+            "luna_reserve_requested": reserve_requested,
+            "luna_reserve_capability_supported": reserve_capability_supported,
+            "luna_reserve_status": reserve_status,
             "luna_reserve_exposed": reserve_exposed,
             "luna_reserve_available": reserve_available,
+            "rate_limit_reset_credits_available": reset_credit_count,
             "luna_reserve_model": LUNA_RESERVE_MODEL if reserve_exposed else "",
             "luna_reserve_normal_model": reserve_normal_model,
             "luna_reserve_limit_ids": reserve_limit_ids,

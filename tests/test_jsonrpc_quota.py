@@ -40,10 +40,53 @@ async def test_codex_app_server_protocol(make_executable, tmp_path: Path) -> Non
         supports_luna_reserve=True,
     )
     assert payload["codex_home"] == "/tmp/codex-home"
+    assert payload["luna_reserve_request_intent"] is True
     assert payload["luna_reserve_requested"] is True
+    assert payload["luna_reserve_capability_supported"] is True
     assert payload["limits"]["requestParams"]["supportsLunaReserve"] is True
     assert payload["limits"]["rateLimits"]["primary"]["usedPercent"] == 10
     assert payload["models"]["data"][0]["id"] == "gpt-5.6-luna"
+
+
+@pytest.mark.asyncio
+async def test_codex_legacy_unit_params_fallback(make_executable, tmp_path: Path) -> None:
+    fake = make_executable(
+        "fake-codex-legacy-unit",
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env python3
+            import json, sys
+            for line in sys.stdin:
+                msg = json.loads(line)
+                method = msg.get("method")
+                if method == "initialize":
+                    print(json.dumps({"id": msg["id"], "result": {"codexHome": "/tmp/legacy-codex-home"}}), flush=True)
+                elif method == "account/read":
+                    print(json.dumps({"id": msg["id"], "result": {"account": {"type": "chatgpt"}}}), flush=True)
+                elif method == "account/rateLimits/read":
+                    params = msg.get("params", "missing")
+                    if isinstance(params, dict):
+                        print(json.dumps({"id": msg["id"], "error": {"code": -32600, "message": "Invalid request: invalid type: map, expected unit"}}), flush=True)
+                    else:
+                        print(json.dumps({"id": msg["id"], "result": {"rateLimits": {"limitId": "codex", "primary": {"usedPercent": 99}}, "legacyParams": params}}), flush=True)
+                elif method == "model/list":
+                    print(json.dumps({"id": msg["id"], "result": {"data": []}}), flush=True)
+            """
+        ),
+    )
+    payload = await read_codex_account(
+        str(fake),
+        tmp_path,
+        timeout=3,
+        env={"PATH": str(Path(fake).parent) + ":/usr/bin"},
+        supports_luna_reserve=True,
+    )
+    assert payload["codex_home"] == "/tmp/legacy-codex-home"
+    assert payload["limits"]["legacyParams"] is None
+    assert payload["limits"]["rateLimits"]["primary"]["usedPercent"] == 99
+    assert payload["luna_reserve_request_intent"] is True
+    assert payload["luna_reserve_requested"] is False
+    assert payload["luna_reserve_capability_supported"] is False
 
 
 @pytest.mark.asyncio
