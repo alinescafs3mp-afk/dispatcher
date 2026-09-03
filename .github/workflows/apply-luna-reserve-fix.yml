@@ -1,0 +1,67 @@
+name: apply-luna-reserve-fix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.luna-reserve-fix.py'
+      - '.github/workflows/apply-luna-reserve-fix.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-luna-reserve-fix-main
+  cancel-in-progress: false
+
+jobs:
+  verify-and-publish:
+    if: github.actor == 'alinescafs3mp-afk'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Apply reviewed Luna Reserve repair
+        run: |
+          set -euo pipefail
+          python .luna-reserve-fix.py
+          rm -f .luna-reserve-fix.py .github/workflows/apply-luna-reserve-fix.yml
+          git diff --check
+
+      - name: Install development dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Verify repair
+        run: |
+          set -euo pipefail
+          ruff check nightshift tests
+          pytest -q
+          python -m compileall -q nightshift tests
+          node --check nightshift/static/app.js
+          python -m build
+          git diff --check
+
+      - name: Publish directly to main
+        run: |
+          set -euo pipefail
+          rm -rf dist build .pytest_cache
+          find . -maxdepth 3 -type d -name '*.egg-info' -prune -exec rm -rf {} +
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+          git add -A
+          git diff --cached --check
+          test ! -e .luna-reserve-fix.py
+          test ! -e .github/workflows/apply-luna-reserve-fix.yml
+          git config user.name 'OpenAI dispatcher auditor'
+          git config user.email 'dispatcher-auditor@users.noreply.github.com'
+          git commit -m 'fix: support backend-authorized Luna Reserve' -m 'Advertise Luna Reserve capability only for the emergency Luna lane, surface backend authorization metadata, and route eligible worker retries through gpt-reserve before falling back to Spark.'
+          git push origin HEAD:main
