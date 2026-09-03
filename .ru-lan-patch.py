@@ -11,9 +11,8 @@ if len(parts) != 6:
 payload = "".join(part.read_text(encoding="utf-8").strip() for part in parts)
 source = bz2.decompress(base64.b64decode(payload)).decode("utf-8")
 
-# The patch generator itself is Python source. Correct two over-escaped
-# search literals before compiling it; the repository source stores one
-# backslash in the rendered TOML template, not two.
+# The patch generator itself is Python source. Correct over-escaped or
+# ambiguous search literals before compiling it.
 old_server = """    '[server]\\\\\\\\nhost = \\\\"127.0.0.1\\\\"\\\\\\\\nport = 8787',
     '[server]\\\\\\\\nhost = \\\\"0.0.0.0\\\\"\\\\\\\\nport = 8787',
 """
@@ -26,9 +25,27 @@ old_hosts = """    '# Exact additional Host names accepted by the dashboard (por
 new_hosts = """    '# Exact additional Host names accepted by the dashboard (ports are optional).\\\\nallowed_hosts = []',
     '# Private LAN IP addresses are accepted automatically on a wildcard bind.\\\\n# Add exact local DNS names here when the dashboard is opened by hostname.\\\\nallowed_hosts = []',
 """
+old_default_host_test = """replace_once(
+    "tests/test_config.py",
+    '    assert settings.project.operational_roots == ["~/.jericho"]\\n',
+    '    assert settings.project.operational_roots == ["~/.jericho"]\\n'
+    '    assert settings.server.host == "0.0.0.0"\\n',
+)
+"""
+new_default_host_test = """replace_once(
+    "tests/test_config.py",
+    '    assert settings.agent("grok").unsafe_full_access is True\\n'
+    '    assert settings.project.operational_roots == ["~/.jericho"]\\n',
+    '    assert settings.agent("grok").unsafe_full_access is True\\n'
+    '    assert settings.project.operational_roots == ["~/.jericho"]\\n'
+    '    assert settings.server.host == "0.0.0.0"\\n',
+)
+"""
+
 for old, new, label in (
     (old_server, new_server, "server template"),
     (old_hosts, new_hosts, "allowed-hosts template"),
+    (old_default_host_test, new_default_host_test, "default-host regression"),
 ):
     if source.count(old) != 1:
         raise RuntimeError(
