@@ -54,3 +54,26 @@ for old, new, label in (
     source = source.replace(old, new)
 
 exec(compile(source, "<russian-lan-ui-patch>", "exec"))
+
+main_path = Path("nightshift/__main__.py")
+main_text = main_path.read_text(encoding="utf-8")
+import_marker = "import argparse\n"
+if main_text.count(import_marker) != 1:
+    raise RuntimeError("unexpected __main__.py import shape")
+main_text = main_text.replace(import_marker, import_marker + "import contextlib\n", 1)
+old_browser_fallback = """    try:
+        webbrowser.open(url)
+    except Exception:
+        # Browser launch is a convenience and must never stop the server.
+        pass
+"""
+new_browser_fallback = """    with contextlib.suppress(Exception):
+        # Browser launch is a convenience and must never stop the server.
+        webbrowser.open(url)
+"""
+if main_text.count(old_browser_fallback) != 1:
+    raise RuntimeError("unexpected browser fallback shape")
+main_path.write_text(
+    main_text.replace(old_browser_fallback, new_browser_fallback, 1),
+    encoding="utf-8",
+)
