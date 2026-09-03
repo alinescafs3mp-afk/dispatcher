@@ -18,6 +18,192 @@ let lastSocketActivity = 0;
 let profileRequestActive = false;
 const logFloors = {};
 
+
+const PROFILE_UI = {
+  reserve: {
+    word: 'резерв',
+    label: 'Резервный контур',
+    badge: 'РЕЗЕРВ',
+    eyebrow: 'АВАРИЙНАЯ НЕПРЕРЫВНОСТЬ',
+    description: 'Grok временно руководит операцией; Luna берёт основную реализацию, а Spark выполняет строго ограниченные микрозадачи, пока штатная пара Sol недоступна.',
+    missionEyebrow: 'АВАРИЙНАЯ МИССИЯ',
+    startLabel: 'Начать аварийный перехват',
+    noMissionTitle: 'Нет активного аварийного перехвата',
+    noMissionMeta: 'Восстановите прерванное состояние и поручите резервной команде завершить сверенный остаток.',
+    goalPlaceholder: 'Цель аварийной миссии',
+    defaultGoal: 'Восстановить прерванную работу Sol и SolGoodman, сверить реальный бэклог и довести его до завершения без архитектурного дрейфа.',
+  },
+  combat: {
+    word: 'бой',
+    label: 'Боевой контур',
+    badge: 'БОЙ',
+    eyebrow: 'ШТАТНАЯ РАЗРАБОТКА',
+    description: 'Sol владеет архитектурой и развивающимся бэклогом, SolGoodman реализует и отлаживает, а Grok при необходимости подключается как быстрый помощник с независимым взглядом.',
+    missionEyebrow: 'ШТАТНАЯ МИССИЯ РАЗРАБОТКИ',
+    startLabel: 'Начать боевую миссию',
+    noMissionTitle: 'Нет активной боевой миссии',
+    noMissionMeta: 'Sol может сверить и дополнить бэклог, затем направить реализацию SolGoodman и опциональному Grok.',
+    goalPlaceholder: 'Цель боевой миссии',
+    defaultGoal: 'Сверить и улучшить текущий бэклог Friday, затем реализовать его по задачам с Sol в роли ведущего архитектора и SolGoodman в роли владельца реализации.',
+  },
+};
+
+const AGENT_UI = {
+  reserve: {
+    grok: {lane: 'ВЕДУЩИЙ АРХИТЕКТОР', role: 'временный главный архитектор и ревьюер'},
+    luna: {lane: 'ОСНОВНОЙ ИСПОЛНИТЕЛЬ', role: 'владелец реализации и отладчик'},
+    spark: {lane: 'МИКРОЗАДАЧИ', role: 'исполнитель ограниченных микрозадач'},
+  },
+  combat: {
+    grok: {lane: 'ВЕДУЩИЙ АРХИТЕКТОР', role: 'владелец архитектуры и бэклога, ревьюер и интеграционная инстанция'},
+    luna: {lane: 'ВЛАДЕЛЕЦ РЕАЛИЗАЦИИ', role: 'ведущий инженер реализации и отладчик'},
+    spark: {lane: 'ОПЦИОНАЛЬНЫЙ ПОМОЩНИК', role: 'быстрый помощник по реализации и альтернативный взгляд'},
+  },
+};
+
+const STATE_LABELS = {
+  offline: 'не в сети',
+  idle: 'готов',
+  recovering: 'восстановление',
+  planning: 'планирование',
+  working: 'работает',
+  implementing: 'реализация',
+  validating: 'проверка',
+  reviewing: 'ревью',
+  revision: 'доработка',
+  waiting: 'ожидание',
+  limited: 'лимит исчерпан',
+  error: 'ошибка',
+  stopped: 'остановлен',
+  disabled: 'отключён',
+  created: 'создана',
+  ready: 'готово',
+  running: 'выполняется',
+  paused: 'на паузе',
+  awaiting_human: 'ждёт решения',
+  blocked: 'заблокирована',
+  failed: 'сбой',
+  completed: 'завершена',
+  accepted: 'принято',
+  rejected: 'отклонено',
+  planned: 'запланировано',
+};
+
+const RISK_LABELS = {
+  low: 'низкий',
+  medium: 'средний',
+  high: 'высокий',
+  critical: 'критический',
+};
+
+const NUDGE_STATUS_LABELS = {
+  queued: 'в очереди',
+  delivered: 'доставлена',
+  expired: 'истекла',
+  sent: 'отправлена',
+};
+
+const STREAM_LABELS = {
+  stdout: 'вывод',
+  stderr: 'ошибка',
+  assistant: 'модель',
+  tool: 'инструмент',
+  validation: 'проверка',
+};
+
+function uiProfile(current=profile()) {
+  return PROFILE_UI[current?.id] || PROFILE_UI.reserve;
+}
+
+function uiAgent(key) {
+  return AGENT_UI[profile()?.id]?.[key] || {};
+}
+
+function profileName(profileId) {
+  return profileId === 'combat' ? 'Бой' : 'Резерв';
+}
+
+function localizeState(value) {
+  return STATE_LABELS[String(value || '').toLowerCase()] || String(value || '');
+}
+
+function localizeRisk(value) {
+  return RISK_LABELS[String(value || '').toLowerCase()] || String(value || '');
+}
+
+function pluralRu(value, forms) {
+  const n = Math.abs(Math.trunc(Number(value) || 0));
+  const mod100 = n % 100;
+  const mod10 = n % 10;
+  if (mod100 >= 11 && mod100 <= 14) return forms[2];
+  if (mod10 === 1) return forms[0];
+  if (mod10 >= 2 && mod10 <= 4) return forms[1];
+  return forms[2];
+}
+
+function decimalRu(value) {
+  return String(value).replace('.', ',');
+}
+
+function localizeQuotaLabel(value) {
+  const label = String(value || '');
+  const exact = {
+    'Grok weekly credits': 'Недельные кредиты Grok',
+    'Grok monthly credits': 'Месячные кредиты Grok',
+    'Grok included credits': 'Включённые кредиты Grok',
+    'Grok on-demand cap': 'Лимит Grok по требованию',
+  };
+  if (exact[label]) return exact[label];
+  return label
+    .replace(/Weekly limit/gi, 'недельный лимит')
+    .replace(/5-hour limit/gi, 'лимит на 5 часов')
+    .replace(/(\d+)-minute limit/gi, 'лимит на $1 мин.')
+    .replace(/Primary limit/gi, 'основной лимит')
+    .replace(/Secondary limit/gi, 'дополнительный лимит');
+}
+
+function localizeQuotaMessage(value) {
+  const message = String(value || '');
+  const exact = {
+    'Agent disabled by the active profile': 'Участник отключён активным профилем.',
+    'No quota windows returned by Codex app-server': 'App-server Codex не вернул окна квот.',
+    'Grok billing responded, but no percentage limit was available': 'Grok ответил данными биллинга, но процентный лимит не был доступен.',
+    'No structured subscription quota command is configured': 'Структурированная команда чтения квот подписки не настроена.',
+    'Limit data not loaded yet.': 'Данные о лимитах ещё не загружены.',
+    'This optional lane is disconnected in the active profile.': 'Этот опциональный участник отключён в активном профиле.',
+  };
+  if (exact[message]) return exact[message];
+  if (message.startsWith('CodexAppServerError:')) {
+    return `Ошибка app-server Codex:${message.slice('CodexAppServerError:'.length)}`;
+  }
+  if (message.startsWith('Grok ACP billing unavailable:')) {
+    return `Биллинг Grok ACP недоступен:${message.slice('Grok ACP billing unavailable:'.length)}`;
+  }
+  return message;
+}
+
+function localizeApiError(value) {
+  const message = String(value || '');
+  const replacements = [
+    ['A mission is already running', 'Миссия уже выполняется.'],
+    ['Mission goal is too short', 'Цель миссии слишком короткая.'],
+    ['No running mission to pause', 'Нет выполняющейся миссии, которую можно поставить на паузу.'],
+    ['No running mission to resume', 'Нет выполняющейся миссии, которую можно продолжить.'],
+    ['No running mission to stop', 'Нет выполняющейся миссии, которую можно остановить.'],
+    ['Mission is not paused', 'Миссия не находится на паузе.'],
+    ['Mission not found', 'Миссия не найдена.'],
+    ['The operation cannot start while an agent turn is active', 'Операция недоступна, пока выполняется ход участника.'],
+    ['The operating profile cannot change while a mission is running or paused', 'Нельзя менять профиль, пока миссия выполняется или стоит на паузе.'],
+    ['Untrusted Host header', 'Недоверенный заголовок Host.'],
+    ['Cross-origin control request rejected', 'Межсайтовый управляющий запрос отклонён.'],
+  ];
+  for (const [source, translated] of replacements) {
+    if (message.includes(source)) return translated;
+  }
+  return message;
+}
+
+
 function toast(message, bad=false) {
   const el = $('#toast');
   el.textContent = message;
@@ -37,16 +223,19 @@ async function api(path, options={}) {
       const body = await response.json();
       message = body.detail || message;
     } catch (_) {}
-    throw new Error(message);
+    throw new Error(localizeApiError(message));
   }
   return response.json();
 }
 
 function fmtTokens(n) {
   n = Number(n || 0);
-  if (n < 1000) return `${n} tokens`;
-  if (n < 1e6) return `${(n/1000).toFixed(n < 10000 ? 1 : 0)}k tokens`;
-  return `${(n/1e6).toFixed(2)}m tokens`;
+  if (n < 1000) return `${n} ${pluralRu(n, ['токен', 'токена', 'токенов'])}`;
+  if (n < 1e6) {
+    const value = (n/1000).toFixed(n < 10000 ? 1 : 0);
+    return `${decimalRu(value)} тыс. токенов`;
+  }
+  return `${decimalRu((n/1e6).toFixed(2))} млн токенов`;
 }
 
 function profile() {
@@ -91,11 +280,12 @@ function applyState(next, clock) {
 
 function renderProfile() {
   const current = profile();
+  const ui = uiProfile(current);
   const locked = Boolean(state?.profile_switch_locked || profileRequestActive);
-  $('#profileEyebrow').textContent = `SOL LINK / ${current.eyebrow || 'OPERATIONS'}`;
-  $('#profileWord').textContent = current.id === 'combat' ? 'combat' : 'reserve';
-  $('#profileDescription').textContent = current.description || '';
-  $('#profileBadge').textContent = current.short_label || current.id || 'profile';
+  $('#profileEyebrow').textContent = `SOL LINK / ${ui.eyebrow}`;
+  $('#profileWord').textContent = ui.word;
+  $('#profileDescription').textContent = ui.description;
+  $('#profileBadge').textContent = ui.badge;
   $('#profileBadge').className = `badge ${current.id === 'combat' ? 'combat' : 'reserve'}`;
   $('#directiveLink').href = `/api/directive/${encodeURIComponent(current.id || 'reserve')}`;
 
@@ -115,26 +305,25 @@ function renderProfile() {
 
 function renderMission() {
   const current = profile();
+  const ui = uiProfile(current);
   const mission = activeMission();
   const running = Boolean(state?.mission_running);
-  $('#missionEyebrow').textContent = current.id === 'combat' ? 'STABLE DEVELOPMENT MISSION' : 'EMERGENCY MISSION';
-  $('#goalInput').placeholder = current.default_goal || 'Mission goal';
-  $('#startBtn').textContent = current.id === 'combat' ? 'Begin combat mission' : 'Begin reserve takeover';
+  $('#missionEyebrow').textContent = ui.missionEyebrow;
+  $('#goalInput').placeholder = ui.goalPlaceholder;
+  $('#startBtn').textContent = ui.startLabel;
 
   if (!mission) {
-    $('#missionTitle').textContent = current.id === 'combat' ? 'No active combat mission' : 'No active takeover';
-    $('#missionMeta').textContent = current.id === 'combat'
-      ? 'Sol can reconcile and extend the backlog, then route implementation to SolGoodman and optional Grok.'
-      : 'Recover the interrupted state, then let the reserve team finish the reconciled remainder.';
+    $('#missionTitle').textContent = ui.noMissionTitle;
+    $('#missionMeta').textContent = ui.noMissionMeta;
     $('#missionPaths').textContent = '';
   } else {
     const missionProfile = mission.profile || 'reserve';
-    $('#missionTitle').textContent = `${mission.id} · ${mission.status}`;
-    $('#missionMeta').textContent = `[${missionProfile}] ${mission.goal}${mission.summary ? ` · ${mission.summary}` : ''}`;
+    $('#missionTitle').textContent = `${mission.id} · ${localizeState(mission.status)}`;
+    $('#missionMeta').textContent = `[${profileName(missionProfile)}] ${mission.goal}${mission.summary ? ` · ${mission.summary}` : ''}`;
     $('#missionPaths').textContent = [
-      mission.integration_branch && `branch: ${mission.integration_branch}`,
-      mission.integration_path && `worktree: ${mission.integration_path}`,
-      mission.forensics_path && `dossier: ${mission.forensics_path}`,
+      mission.integration_branch && `ветка: ${mission.integration_branch}`,
+      mission.integration_path && `рабочее дерево: ${mission.integration_path}`,
+      mission.forensics_path && `досье: ${mission.forensics_path}`,
     ].filter(Boolean).join('  |  ');
   }
 
@@ -155,10 +344,10 @@ function quotaNode(window) {
   row.className = 'quota-row';
   const label = document.createElement('div');
   label.className = 'quota-label';
-  const left = window.left_percent == null ? '?' : `${Math.round(window.left_percent)}% left`;
-  const reset = window.resets_at_text ? ` · ${window.resets_at_text}` : '';
+  const left = window.left_percent == null ? 'неизвестно' : `${Math.round(window.left_percent)}% свободно`;
+  const reset = window.resets_at_text ? ` · сброс: ${window.resets_at_text}` : '';
   const a = document.createElement('span');
-  a.textContent = window.label || window.id;
+  a.textContent = localizeQuotaLabel(window.label || window.id);
   const b = document.createElement('span');
   b.textContent = `${left}${reset}`;
   label.append(a, b);
@@ -179,38 +368,41 @@ function renderAgents() {
   for (const key of LOGICAL_KEYS) {
     const card = $(`.agent-card[data-key="${key}"]`);
     const spec = profileAgent(key);
+    const ui = uiAgent(key);
     const agent = agents[spec.id] || {};
     const enabled = spec.enabled !== false;
-    card.dataset.state = enabled ? (agent.state || 'offline') : 'disabled';
+    const rawState = enabled ? (agent.state || 'offline') : 'disabled';
+    card.dataset.state = rawState;
     card.classList.toggle('agent-disabled', !enabled);
     card.style.order = String((profile().slot_order || LOGICAL_KEYS).indexOf(key));
 
-    $('[data-role="lane"]', card).textContent = (spec.lane || key).toUpperCase();
+    $('[data-role="lane"]', card).textContent = ui.lane || (spec.lane || key).toUpperCase();
     $('[data-role="name"]', card).textContent = spec.display_name || key;
-    $('[data-role="role"]', card).textContent = spec.role || '';
+    $('[data-role="role"]', card).textContent = ui.role || spec.role || '';
     $('[data-role="binary"]', card).textContent = spec.binary_label || spec.physical_key || 'CLI';
-    $('[data-role="model"]', card).textContent = agent.model || spec.model || 'wrapper-selected model';
-    $('[data-role="state"]', card).textContent = !enabled
-      ? 'disabled'
-      : agent.current_task
-        ? `${agent.state || 'offline'} · ${agent.current_task}`
-        : (agent.state || 'offline');
+    $('[data-role="model"]', card).textContent = agent.model || spec.model || 'модель выбирает wrapper';
+    const stateLabel = localizeState(rawState);
+    $('[data-role="state"]', card).textContent = agent.current_task
+      ? `${stateLabel} · ${agent.current_task}`
+      : stateLabel;
 
     const optional = $('[data-role="optional"]', card);
     optional.hidden = !spec.optional;
-    optional.textContent = enabled ? 'optional · enabled' : 'optional · disabled';
+    optional.textContent = enabled ? 'опционально · включён' : 'опционально · отключён';
 
     const access = $('[data-role="access"]', card);
     const fullAccess = Boolean(spec.unsafe_full_access);
-    access.textContent = fullAccess ? 'full access' : 'sandboxed';
+    access.textContent = fullAccess ? 'полный доступ' : 'песочница';
     access.className = `badge ${fullAccess ? 'full-access' : 'sandboxed'}`;
     access.title = fullAccess
-      ? "Automated work and architect turns may use the participant CLI's full host-access mode. Direct chats remain read-only."
-      : 'This participant stays inside its configured CLI sandbox.';
+      ? 'Автоматические рабочие и архитектурные ходы могут использовать полный доступ CLI к хосту. Прямой чат остаётся только для чтения.'
+      : 'Этот участник остаётся внутри настроенной песочницы CLI.';
 
     const messageButton = $('[data-role="message-agent"]', card);
     messageButton.disabled = !enabled;
-    messageButton.textContent = enabled ? `message ${spec.display_name || key}` : 'participant disabled';
+    messageButton.textContent = enabled
+      ? `написать ${spec.display_name || key}`
+      : 'участник отключён';
 
     const cfg = state?.config?.agents?.[key] || spec;
     const effort = $('[data-role="effort"]', card);
@@ -243,8 +435,8 @@ function renderAgents() {
       const empty = document.createElement('div');
       empty.className = 'quota-empty';
       empty.textContent = !enabled
-        ? 'This optional lane is disconnected in the active profile.'
-        : quota?.message || 'Limit data not loaded yet.';
+        ? 'Этот опциональный участник отключён в активном профиле.'
+        : localizeQuotaMessage(quota?.message || 'Limit data not loaded yet.');
       zone.append(empty);
     }
 
@@ -255,7 +447,8 @@ function renderAgents() {
     const logs = (state?.logs?.[agentId] || []).filter(row => Number(row.seq || 0) > floor);
     consoleEl.textContent = logs.map(row => {
       const time = String(row.created_at || '').slice(11, 19);
-      return `[${time}] ${String(row.stream || '').padEnd(10)} ${row.text || ''}`;
+      const stream = STREAM_LABELS[String(row.stream || '').toLowerCase()] || String(row.stream || '');
+      return `[${time}] ${stream.padEnd(10)} ${row.text || ''}`;
     }).join('\n');
     if (nearBottom) consoleEl.scrollTop = consoleEl.scrollHeight;
   }
@@ -271,7 +464,7 @@ function renderTasks() {
     const td = document.createElement('td');
     td.colSpan = 5;
     td.className = 'empty';
-    td.textContent = 'No task packets yet.';
+    td.textContent = 'Пакетов задач пока нет.';
     tr.append(td);
     body.append(tr);
   } else {
@@ -281,8 +474,8 @@ function renderTasks() {
       const values = [
         task.title || task.id,
         worker.display_name || task.worker,
-        task.status,
-        task.risk,
+        localizeState(task.status),
+        localizeRisk(task.risk),
         task.attempt,
       ];
       values.forEach((value, index) => {
@@ -302,21 +495,21 @@ function renderTasks() {
   gate.hidden = !pending;
   if (pending) {
     const h = document.createElement('h4');
-    h.textContent = `Human gate: ${pending.title}`;
+    h.textContent = `Решение оператора: ${pending.title}`;
     const p = document.createElement('div');
     p.className = 'muted-text';
-    p.textContent = `${pending.review?.summary || 'Architect requested operator approval'} · risk ${pending.risk}`;
+    p.textContent = `${pending.review?.summary || 'Архитектор запросил подтверждение оператора'} · риск: ${localizeRisk(pending.risk)}`;
     const actions = document.createElement('div');
     actions.className = 'gate-actions';
     const yes = document.createElement('button');
     yes.className = 'primary';
     yes.type = 'button';
-    yes.textContent = 'Approve integration';
+    yes.textContent = 'Разрешить интеграцию';
     yes.onclick = () => decide(pending.id, true);
     const no = document.createElement('button');
     no.className = 'danger';
     no.type = 'button';
-    no.textContent = 'Reject';
+    no.textContent = 'Отклонить';
     no.onclick = () => decide(pending.id, false);
     actions.append(yes, no);
     gate.append(h, p, actions);
@@ -329,9 +522,10 @@ function renderChatControls() {
   const options = [];
   for (const key of profile().slot_order || LOGICAL_KEYS) {
     const spec = profileAgent(key);
+    const ui = uiAgent(key);
     const option = document.createElement('option');
     option.value = key;
-    option.textContent = `${spec.display_name || key} · ${spec.lane || spec.role || key}`;
+    option.textContent = `${spec.display_name || key} · ${ui.lane || spec.lane || spec.role || key}`;
     option.disabled = spec.enabled === false;
     options.push(option);
   }
@@ -343,10 +537,10 @@ function renderChatControls() {
     select.value = profile().architect_key || 'grok';
   }
   const selected = profileAgent(select.value);
-  $('#chatChannelTitle').textContent = `Talk to ${selected.display_name || select.value}`;
+  $('#chatChannelTitle').textContent = `Связь: ${selected.display_name || select.value}`;
   $('#chatHint').textContent = selected.enabled === false
-    ? 'This participant is disconnected in the active profile.'
-    : 'Auto talks immediately when the lane is free and queues a durable nudge when it is busy. Direct chats never edit or dispatch work.';
+    ? 'Этот участник отключён в активном профиле.'
+    : 'Авто отправляет сообщение сразу, если линия свободна, или ставит надёжную подсказку в очередь, если участник занят. Прямой разговор не редактирует код и не создаёт задачи.';
   $('#chatInput').disabled = selected.enabled === false;
   $('#chatForm button').disabled = selected.enabled === false;
 }
@@ -365,7 +559,7 @@ function renderChat() {
   if (!messages.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.textContent = `No direct messages with ${selected.display_name || selectedKey} yet.`;
+    empty.textContent = `Прямых сообщений с ${selected.display_name || selectedKey} пока нет.`;
     root.append(empty);
     return;
   }
@@ -374,9 +568,10 @@ function renderChat() {
     bubble.className = `chat-bubble ${message.role === 'user' ? 'user' : ''} ${message.kind === 'nudge' ? 'nudge' : ''}`;
     const who = document.createElement('small');
     const direction = message.role === 'user'
-      ? `operator → ${selected.display_name || selectedKey}`
+      ? `оператор → ${selected.display_name || selectedKey}`
       : selected.display_name || selectedKey;
-    const status = message.kind === 'nudge' ? ` · nudge ${message.status || 'queued'}` : '';
+    const nudgeStatus = NUDGE_STATUS_LABELS[message.status] || message.status || 'в очереди';
+    const status = message.kind === 'nudge' ? ` · подсказка ${nudgeStatus}` : '';
     who.textContent = `${direction}${status}`;
     const text = document.createElement('div');
     text.textContent = message.text;
@@ -456,7 +651,7 @@ async function switchProfile(profileId, combatGrokEnabled) {
     });
     if (result) {
       $('#goalInput').value = '';
-      toast(`${result.label || profileId}: profile activated.`);
+      toast(`${PROFILE_UI[profileId]?.label || profileId}: профиль активирован.`);
     }
   } finally {
     profileRequestActive = false;
@@ -465,7 +660,7 @@ async function switchProfile(profileId, combatGrokEnabled) {
 }
 
 $('#startBtn').onclick = async () => {
-  const goal = $('#goalInput').value.trim() || profile().default_goal;
+  const goal = $('#goalInput').value.trim() || uiProfile().defaultGoal;
   await requestAction('/api/missions/start', {body: {goal}});
 };
 $('#pauseBtn').onclick = () => requestAction('/api/mission/pause');
@@ -475,12 +670,12 @@ $('#resumeInterruptedBtn').onclick = () => requestAction(
   `/api/missions/${encodeURIComponent($('#resumeInterruptedBtn').dataset.id)}/resume`
 );
 $('#doctorBtn').onclick = async () => {
-  toast('Running CLI doctor…');
-  if (await requestAction('/api/doctor')) toast('Doctor finished.');
+  toast('Проверяю CLI и авторизацию…');
+  if (await requestAction('/api/doctor')) toast('Диагностика завершена.');
 };
 $('#quotaBtn').onclick = async () => {
-  toast('Reading subscription limits…');
-  if (await requestAction('/api/quotas')) toast('Limits refreshed.');
+  toast('Читаю лимиты подписок…');
+  if (await requestAction('/api/quotas')) toast('Лимиты обновлены.');
 };
 
 $$('#profileSwitch [data-profile]').forEach(button => {
@@ -506,7 +701,7 @@ $('#chatForm').onsubmit = async event => {
   if (!result) {
     input.value = text;
   } else if (result.status === 'queued') {
-    toast(`${result.display_name}: nudge queued for the next work turn.`);
+    toast(`${result.display_name}: подсказка поставлена в очередь на следующий рабочий ход.`);
   }
 };
 
@@ -547,7 +742,7 @@ $$('[data-role="effort"]').forEach(select => {
         body: {effort},
       });
       if (result) {
-        toast(`${profileAgent(key).display_name || key}: reasoning ${effort} applies on the next turn.`);
+        toast(`${profileAgent(key).display_name || key}: уровень рассуждения ${effort} применится со следующего хода.`);
       }
     } finally {
       select.dataset.saving = 'false';
@@ -568,7 +763,7 @@ function connect() {
     reconnectDelay = 1000;
     lastSocketActivity = Date.now();
     const badge = $('#socketBadge');
-    badge.textContent = 'Sol Link live';
+    badge.textContent = 'Sol Link на связи';
     badge.className = 'badge good';
   };
   ws.onmessage = event => {
@@ -603,7 +798,7 @@ function connect() {
     if (activeSocket !== ws) return;
     activeSocket = null;
     const badge = $('#socketBadge');
-    badge.textContent = 'reconnecting';
+    badge.textContent = 'переподключение';
     badge.className = 'badge bad';
     if (reconnectTimer !== null) return;
     const jitter = 0.8 + Math.random() * 0.4;
@@ -631,7 +826,7 @@ setInterval(() => {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
   if (Date.now() - lastSocketActivity <= SOCKET_STALE_MS) return;
   const badge = $('#socketBadge');
-  badge.textContent = 'link stale';
+  badge.textContent = 'связь устарела';
   badge.className = 'badge bad';
   ws.close(4000, 'heartbeat timeout');
 }, SOCKET_WATCH_INTERVAL_MS);

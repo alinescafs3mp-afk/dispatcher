@@ -1,9 +1,12 @@
 # Sol Link Dispatcher configuration
 
 [server]
-host = "127.0.0.1"
+host = "0.0.0.0"
 port = 8787
 open_browser = true
+# Частные IPv4/IPv6-адреса локальной сети принимаются автоматически.
+# Точные локальные DNS-имена можно добавить сюда, порты необязательны.
+allowed_hosts = []
 
 [project]
 repo = "/jericho/jericho"

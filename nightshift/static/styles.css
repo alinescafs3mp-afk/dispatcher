@@ -114,6 +114,41 @@ tbody tr:hover { background: rgba(255,255,255,.025); }
 .chat-bubble small { display: block; color: var(--muted); font: 9px/1 ui-monospace,monospace; margin-bottom: 6px; text-transform: uppercase; }
 .chat-form { display: grid; grid-template-columns: 1fr auto; gap: 9px; margin-top: 14px; align-items: stretch; }
 .toast { position: fixed; right: 24px; bottom: 24px; z-index: 20; max-width: 520px; background: #1a2024; border: 1px solid var(--line); box-shadow: 0 15px 50px rgba(0,0,0,.45); padding: 12px 15px; border-radius: 11px; font-size: 12px; }
+
+/* Увеличенная типографика для продолжительной работы с панелью. */
+body { font-size: 16px; line-height: 1.45; }
+h2 { font-size: 24px; }
+h3 { font-size: 25px; }
+.eyebrow { font-size: 11.5px; line-height: 1.25; }
+.top-description { font-size: 14px; line-height: 1.55; }
+.profile-switch { grid-template-columns: repeat(2, minmax(102px, 1fr)); }
+.helper-toggle { font-size: 11.5px; }
+button,.button-link { font-size: 13.5px; line-height: 1.15; }
+.tiny { font-size: 11.5px; }
+.badge { font-size: 11px; line-height: 1.1; }
+.muted-text { font-size: 14px; line-height: 1.5; }
+textarea { font-size: 15px; line-height: 1.55; }
+.path-strip { font-size: 12.5px; }
+.agent-role { font-size: 12.5px; line-height: 1.5; }
+.state-dot { font-size: 11px; line-height: 1.15; }
+.agent-facts { font-size: 11.5px; line-height: 1.4; }
+.reasoning-control { font-size: 10.5px; line-height: 1.15; }
+.reasoning-control select,.chat-toolbar select { font-size: 12.5px; line-height: 1.2; }
+.reasoning-control small { font-size: 9.5px; }
+.quota-label { align-items: start; font-size: 11.5px; line-height: 1.35; }
+.quota-label span:last-child { text-align: right; }
+.quota-empty { font-size: 12.5px; line-height: 1.5; }
+.console-title { font-size: 11.5px; }
+.console { font-size: 12px; line-height: 1.55; }
+table { font-size: 13.5px; }
+th { font-size: 10.5px; line-height: 1.15; }
+.empty { font-size: 13px; }
+.chat-toolbar label { font-size: 10.5px; line-height: 1.15; }
+.chat-hint { font-size: 12.5px; line-height: 1.5; }
+.chat-bubble { font-size: 13.5px; line-height: 1.6; }
+.chat-bubble small { font-size: 10px; line-height: 1.15; }
+.toast { font-size: 13.5px; line-height: 1.45; }
+
 @media (max-width: 1150px) {
   .agents-grid { grid-template-columns: 1fr; }
   .console { height: 180px; }

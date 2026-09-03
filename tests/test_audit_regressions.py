@@ -45,6 +45,45 @@ def test_matching_attacker_origin_cannot_bypass_host_allowlist(
     assert response.json()["detail"] == "Untrusted Host header"
 
 
+def test_wildcard_bind_accepts_private_lan_ip_but_not_public_ip(
+    git_repo: Path,
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(git_repo, tmp_path)
+    settings.server.host = "0.0.0.0"
+    settings.server.allowed_hosts = []
+    for agent in settings.agents.values():
+        agent.enabled = False
+
+    with TestClient(create_app(settings)) as client:
+        lan = client.get(
+            "/healthz",
+            headers={"Host": "192.168.1.35:8787"},
+        )
+        public = client.get(
+            "/healthz",
+            headers={"Host": "8.8.8.8:8787"},
+        )
+
+    assert lan.status_code == 200
+    assert public.status_code == 421
+
+
+def test_dashboard_static_surface_is_russian_and_uses_larger_type() -> None:
+    root = Path(__file__).resolve().parents[1]
+    html = (root / "nightshift/static/index.html").read_text(encoding="utf-8")
+    css = (root / "nightshift/static/styles.css").read_text(encoding="utf-8")
+    javascript = (root / "nightshift/static/app.js").read_text(encoding="utf-8")
+
+    assert '<html lang="ru">' in html
+    assert "Обновить лимиты" in html
+    assert "Пакеты задач" in html
+    assert "Begin mission" not in html
+    assert "body { font-size: 16px;" in css
+    assert "Sol Link на связи" in javascript
+    assert "лимит исчерпан" in javascript
+
+
 def test_compaction_never_exceeds_small_limit() -> None:
     text = "HEAD" + ("x" * 3000) + "TAIL"
     result = compact_text(text, 500)

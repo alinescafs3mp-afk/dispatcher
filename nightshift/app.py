@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 from collections.abc import Coroutine
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -94,10 +95,34 @@ def _trusted_hostnames(settings: Settings) -> set[str]:
     return trusted
 
 
-def _host_allowed(host: str, trusted_hosts: set[str]) -> bool:
-    hostname = _hostname(host)
-    return bool(hostname and hostname in trusted_hosts)
+def _is_private_network_host(value: str) -> bool:
+    hostname = _hostname(value)
+    if not hostname:
+        return False
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return address.is_private or address.is_loopback or address.is_link_local
 
+
+def _host_allowed(
+    host: str,
+    trusted_hosts: set[str],
+    *,
+    allow_private_network: bool = False,
+) -> bool:
+    hostname = _hostname(host)
+    return bool(
+        hostname
+        and (
+            hostname in trusted_hosts
+            or (
+                allow_private_network
+                and _is_private_network_host(hostname)
+            )
+        )
+    )
 
 def _origin_allowed(origin: str, host: str, scheme: str = "http") -> bool:
     """Accept non-browser clients and same-origin browser control requests."""
@@ -154,6 +179,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     static_dir = Path(__file__).with_name("static")
     background_tasks: set[asyncio.Task[Any]] = set()
     trusted_hosts = _trusted_hostnames(resolved)
+    allow_private_network_hosts = (
+        _hostname(resolved.server.host) in _WILDCARD_BIND_HOSTS
+    )
 
     def spawn(coroutine: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         task = asyncio.create_task(coroutine)
@@ -190,7 +218,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.middleware("http")
     async def reject_untrusted_or_cross_origin_controls(request: Request, call_next):
         request_host = request.headers.get("host", "")
-        if not _host_allowed(request_host, trusted_hosts):
+        if not _host_allowed(
+            request_host,
+            trusted_hosts,
+            allow_private_network=allow_private_network_hosts,
+        ):
             return JSONResponse(
                 status_code=421,
                 content={"detail": "Untrusted Host header"},
@@ -366,7 +398,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.websocket("/ws")
     async def websocket(websocket: WebSocket) -> None:
         websocket_host = websocket.headers.get("host", "")
-        if not _host_allowed(websocket_host, trusted_hosts):
+        if not _host_allowed(
+            websocket_host,
+            trusted_hosts,
+            allow_private_network=allow_private_network_hosts,
+        ):
             await websocket.close(code=1008, reason="untrusted websocket host")
             return
         if not _origin_allowed(

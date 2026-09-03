@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import shutil
+import subprocess
 import sys
+import threading
 import webbrowser
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +22,54 @@ from .git import is_git_repo
 from .orchestrator import NightshiftOrchestrator
 from .profiles import PROFILE_IDS
 from .prompts import directive_path
+
+
+def _browser_environment() -> dict[str, str]:
+    "Remove obsolete GTK accessibility modules only for the browser launcher."
+    env = os.environ.copy()
+    for name in ("GTK_MODULES", "GTK3_MODULES"):
+        modules = [
+            item.strip()
+            for item in env.get(name, "").split(":")
+            if item.strip() and item.strip().casefold() != "atk-bridge"
+        ]
+        if modules:
+            env[name] = ":".join(modules)
+        else:
+            env.pop(name, None)
+    return env
+
+
+def _open_browser_quietly(url: str) -> None:
+    "Open the dashboard without leaking harmless GTK loader chatter."
+    if sys.platform.startswith("linux"):
+        opener = shutil.which("xdg-open")
+        if opener:
+            try:
+                subprocess.Popen(
+                    [opener, url],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=_browser_environment(),
+                    start_new_session=True,
+                    close_fds=True,
+                )
+                return
+            except OSError:
+                pass
+    with contextlib.suppress(Exception):
+        # Browser launch is a convenience and must never stop the server.
+        webbrowser.open(url)
+
+
+def _browser_host(bind_host: str) -> str:
+    if bind_host == "0.0.0.0":
+        return "127.0.0.1"
+    if bind_host in {"::", "[::]"}:
+        return "::1"
+    return bind_host
+
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -128,24 +179,25 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "serve":
         host = args.host or settings.server.host
         port = args.port or settings.server.port
-        if host in {"0.0.0.0", "::", "[::]"} and not settings.server.allowed_hosts:
-            raise SystemExit(
-                "Wildcard dashboard binding requires at least one exact "
-                "server.allowed_hosts entry."
-            )
         # create_app must see the effective CLI override so Host validation matches
         # the socket Uvicorn actually opens.
         settings.server.host = host
         settings.server.port = port
         should_open = settings.server.open_browser and not args.no_browser
-        url_host = f"[{host}]" if ":" in host and not host.startswith("[") else host
+        browser_host = _browser_host(host)
+        url_host = (
+            f"[{browser_host}]"
+            if ":" in browser_host and not browser_host.startswith("[")
+            else browser_host
+        )
         url = f"http://{url_host}:{port}"
-        if should_open and host in {"127.0.0.1", "localhost", "::1", "[::1]"}:
-            # Uvicorn starts immediately after this; browser retries while the socket opens.
-            import threading
-            timer = threading.Timer(0.8, lambda: webbrowser.open(url))
+        if should_open:
+            # Uvicorn starts immediately after this; the browser retries while
+            # the socket opens. Wildcard binds are opened through loopback.
+            timer = threading.Timer(0.8, _open_browser_quietly, args=(url,))
             timer.daemon = True
             timer.start()
+
         uvicorn.run(create_app(settings), host=host, port=port, log_level="info")
         return 0
 

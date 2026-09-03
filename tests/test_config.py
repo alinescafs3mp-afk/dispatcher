@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from nightshift.__main__ import _browser_environment
 from nightshift.config import default_settings, load_settings, render_example, sanitized_child_env
 
 
@@ -16,6 +17,7 @@ def test_default_subscription_wiring() -> None:
     assert settings.agent("grok").model == "grok-4.6"
     assert settings.agent("grok").unsafe_full_access is True
     assert settings.project.operational_roots == ["~/.jericho"]
+    assert settings.server.host == "0.0.0.0"
 
 
 def test_default_reasoning_menus() -> None:
@@ -44,6 +46,7 @@ def test_render_example_round_trip(tmp_path: Path) -> None:
     assert settings.profiles.combat_goodman_full_access is True
     assert settings.profiles.combat_grok_full_access is True
     assert settings.project.operational_roots == ["~/.jericho"]
+    assert settings.server.host == "0.0.0.0"
 
 
 def test_operational_roots_expand_and_deduplicate(tmp_path: Path) -> None:
@@ -79,6 +82,14 @@ def test_sanitized_child_env_removes_credentials(monkeypatch) -> None:
     assert env["HOME"] == "/tmp/home"
     assert env["CODEX_HOME"] == "/tmp/codex"
     assert env["CI"] == "1"
+
+
+def test_browser_environment_removes_obsolete_atk_bridge(monkeypatch) -> None:
+    monkeypatch.setenv("GTK_MODULES", "atk-bridge:canberra-gtk-module")
+    monkeypatch.setenv("GTK3_MODULES", "atk-bridge")
+    env = _browser_environment()
+    assert env["GTK_MODULES"] == "canberra-gtk-module"
+    assert "GTK3_MODULES" not in env
 
 
 def test_agent_explicit_strip_applies(monkeypatch) -> None:

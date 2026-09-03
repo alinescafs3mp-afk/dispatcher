@@ -10,12 +10,12 @@
   <div class="noise"></div>
   <header class="topbar">
     <div>
-      <div id="profileEyebrow" class="eyebrow">SOL LINK / EMERGENCY CONTINUITY</div>
-      <h1>Dispatcher <span id="profileWord">reserve</span></h1>
-      <p id="profileDescription" class="top-description">Loading operating profile…</p>
+      <div id="profileEyebrow" class="eyebrow">SOL LINK / АВАРИЙНАЯ НЕПРЕРЫВНОСТЬ</div>
+      <h1>Диспетчер <span id="profileWord">резерв</span></h1>
+      <p id="profileDescription" class="top-description">Загрузка рабочего профиля…</p>
     </div>
     <div class="header-stack">
-      <div class="profile-controls glass-soft" aria-label="Operating profile">
+      <div class="profile-controls glass-soft" aria-label="Рабочий профиль">
         <div id="profileSwitch" class="profile-switch" role="group" aria-label="Бой или резерв">
           <button type="button" data-profile="combat">Бой</button>
           <button type="button" data-profile="reserve">Резерв</button>
@@ -26,11 +26,11 @@
         </label>
       </div>
       <div class="header-actions">
-        <span id="socketBadge" class="badge muted">linking…</span>
-        <span id="profileBadge" class="badge muted">profile…</span>
-        <button id="doctorBtn" class="ghost" type="button">Doctor</button>
-        <button id="quotaBtn" class="ghost" type="button">Refresh limits</button>
-        <a id="directiveLink" class="ghost button-link" href="/api/directive">Directive ↧</a>
+        <span id="socketBadge" class="badge muted">подключение…</span>
+        <span id="profileBadge" class="badge muted">профиль…</span>
+        <button id="doctorBtn" class="ghost" type="button">Диагностика</button>
+        <button id="quotaBtn" class="ghost" type="button">Обновить лимиты</button>
+        <a id="directiveLink" class="ghost button-link" href="/api/directive">Директива ↧</a>
       </div>
     </div>
   </header>
@@ -39,107 +39,107 @@
     <section class="mission-panel glass">
       <div class="mission-heading">
         <div>
-          <div id="missionEyebrow" class="eyebrow">MISSION</div>
-          <h2 id="missionTitle">No active mission</h2>
-          <p id="missionMeta" class="muted-text">Loading mission state…</p>
+          <div id="missionEyebrow" class="eyebrow">МИССИЯ</div>
+          <h2 id="missionTitle">Нет активной миссии</h2>
+          <p id="missionMeta" class="muted-text">Загрузка состояния миссии…</p>
         </div>
         <div class="mission-controls">
-          <button id="pauseBtn" class="ghost" type="button" disabled>Pause</button>
-          <button id="resumeBtn" class="ghost" type="button" disabled>Continue</button>
-          <button id="stopBtn" class="danger" type="button" disabled>Stop</button>
+          <button id="pauseBtn" class="ghost" type="button" disabled>Пауза</button>
+          <button id="resumeBtn" class="ghost" type="button" disabled>Продолжить</button>
+          <button id="stopBtn" class="danger" type="button" disabled>Остановить</button>
         </div>
       </div>
       <div class="mission-launch">
-        <textarea id="goalInput" rows="2" placeholder="Mission goal"></textarea>
-        <button id="startBtn" class="primary" type="button">Begin mission</button>
-        <button id="resumeInterruptedBtn" class="ghost" type="button" hidden>Resume preserved mission</button>
+        <textarea id="goalInput" rows="2" placeholder="Цель миссии"></textarea>
+        <button id="startBtn" class="primary" type="button">Начать миссию</button>
+        <button id="resumeInterruptedBtn" class="ghost" type="button" hidden>Возобновить сохранённую миссию</button>
       </div>
       <div id="missionPaths" class="path-strip"></div>
     </section>
 
-    <section class="agents-grid" aria-label="Active participants">
+    <section class="agents-grid" aria-label="Активные участники">
       <article class="agent-card glass" data-key="grok">
         <div class="agent-head">
           <div>
-            <div class="eyebrow" data-role="lane">LEAD ARCHITECT</div>
-            <h3><strong data-role="name">Architect</strong> <span data-role="effort-badge"></span></h3>
+            <div class="eyebrow" data-role="lane">ВЕДУЩИЙ АРХИТЕКТОР</div>
+            <h3><strong data-role="name">Архитектор</strong> <span data-role="effort-badge"></span></h3>
             <div class="agent-role" data-role="role"></div>
           </div>
-          <span class="state-dot"><i></i><b data-role="state">offline</b></span>
+          <span class="state-dot"><i></i><b data-role="state">не в сети</b></span>
         </div>
-        <div class="agent-facts"><span data-role="model">model</span><span data-role="usage">0 tokens</span></div>
-        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span class="agent-badges"><span data-role="access" class="badge muted">access…</span><span data-role="optional" class="badge muted" hidden>optional</span></span></div>
-        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Architect reasoning"></select><small>next turn</small></label>
+        <div class="agent-facts"><span data-role="model">модель</span><span data-role="usage">0 токенов</span></div>
+        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">написать / подсказать</button><span class="agent-badges"><span data-role="access" class="badge muted">доступ…</span><span data-role="optional" class="badge muted" hidden>опционально</span></span></div>
+        <label class="reasoning-control"><span>Рассуждение</span><select data-role="effort" aria-label="Уровень рассуждения архитектора"></select><small>следующий ход</small></label>
         <div class="quota-zone" data-role="quotas"></div>
-        <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">clear view</button></div>
+        <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">очистить вид</button></div>
         <pre class="console" data-role="console"></pre>
       </article>
 
       <article class="agent-card glass" data-key="luna">
         <div class="agent-head">
           <div>
-            <div class="eyebrow" data-role="lane">IMPLEMENTATION OWNER</div>
-            <h3><strong data-role="name">Primary worker</strong> <span data-role="effort-badge"></span></h3>
+            <div class="eyebrow" data-role="lane">ОСНОВНОЙ ИСПОЛНИТЕЛЬ</div>
+            <h3><strong data-role="name">Основной исполнитель</strong> <span data-role="effort-badge"></span></h3>
             <div class="agent-role" data-role="role"></div>
           </div>
-          <span class="state-dot"><i></i><b data-role="state">offline</b></span>
+          <span class="state-dot"><i></i><b data-role="state">не в сети</b></span>
         </div>
-        <div class="agent-facts"><span data-role="model">model</span><span data-role="usage">0 tokens</span></div>
-        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span class="agent-badges"><span data-role="access" class="badge muted">access…</span><span data-role="optional" class="badge muted" hidden>optional</span></span></div>
-        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Primary worker reasoning"></select><small>next turn</small></label>
+        <div class="agent-facts"><span data-role="model">модель</span><span data-role="usage">0 токенов</span></div>
+        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">написать / подсказать</button><span class="agent-badges"><span data-role="access" class="badge muted">доступ…</span><span data-role="optional" class="badge muted" hidden>опционально</span></span></div>
+        <label class="reasoning-control"><span>Рассуждение</span><select data-role="effort" aria-label="Уровень рассуждения основного исполнителя"></select><small>следующий ход</small></label>
         <div class="quota-zone" data-role="quotas"></div>
-        <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">clear view</button></div>
+        <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">очистить вид</button></div>
         <pre class="console" data-role="console"></pre>
       </article>
 
       <article class="agent-card glass" data-key="spark">
         <div class="agent-head">
           <div>
-            <div class="eyebrow" data-role="lane">SECONDARY WORKER</div>
-            <h3><strong data-role="name">Secondary worker</strong> <span data-role="effort-badge"></span></h3>
+            <div class="eyebrow" data-role="lane">МИКРОЗАДАЧИ</div>
+            <h3><strong data-role="name">Вспомогательный исполнитель</strong> <span data-role="effort-badge"></span></h3>
             <div class="agent-role" data-role="role"></div>
           </div>
-          <span class="state-dot"><i></i><b data-role="state">offline</b></span>
+          <span class="state-dot"><i></i><b data-role="state">не в сети</b></span>
         </div>
-        <div class="agent-facts"><span data-role="model">model</span><span data-role="usage">0 tokens</span></div>
-        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">message / nudge</button><span class="agent-badges"><span data-role="access" class="badge muted">access…</span><span data-role="optional" class="badge muted" hidden>optional</span></span></div>
-        <label class="reasoning-control"><span>Reasoning</span><select data-role="effort" aria-label="Secondary worker reasoning"></select><small>next turn</small></label>
+        <div class="agent-facts"><span data-role="model">модель</span><span data-role="usage">0 токенов</span></div>
+        <div class="agent-actions"><button data-role="message-agent" class="tiny" type="button">написать / подсказать</button><span class="agent-badges"><span data-role="access" class="badge muted">доступ…</span><span data-role="optional" class="badge muted" hidden>опционально</span></span></div>
+        <label class="reasoning-control"><span>Рассуждение</span><select data-role="effort" aria-label="Уровень рассуждения вспомогательного исполнителя"></select><small>следующий ход</small></label>
         <div class="quota-zone" data-role="quotas"></div>
-        <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">clear view</button></div>
+        <div class="console-title"><span data-role="binary">CLI</span><button data-role="clear-log" class="tiny" type="button">очистить вид</button></div>
         <pre class="console" data-role="console"></pre>
       </article>
     </section>
 
     <section class="work-grid">
       <article class="ledger glass">
-        <div class="section-head"><div><div class="eyebrow">SOL LINK LEDGER</div><h2>Task packets</h2></div><span id="taskCount" class="badge">0</span></div>
+        <div class="section-head"><div><div class="eyebrow">ЖУРНАЛ SOL LINK</div><h2>Пакеты задач</h2></div><span id="taskCount" class="badge">0</span></div>
         <div id="humanGate" class="human-gate" hidden></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Task</th><th>Worker</th><th>State</th><th>Risk</th><th>Attempt</th></tr></thead>
-            <tbody id="taskRows"><tr><td colspan="5" class="empty">No task packets yet.</td></tr></tbody>
+            <thead><tr><th>Задача</th><th>Исполнитель</th><th>Состояние</th><th>Риск</th><th>Попытка</th></tr></thead>
+            <tbody id="taskRows"><tr><td colspan="5" class="empty">Пакетов задач пока нет.</td></tr></tbody>
           </table>
         </div>
       </article>
 
       <article id="teamChat" class="chat glass">
         <div class="section-head">
-          <div><div class="eyebrow">DIRECT LINES</div><h2 id="chatChannelTitle">Talk to the team</h2></div>
-          <span class="badge">read-only</span>
+          <div><div class="eyebrow">ПРЯМЫЕ ЛИНИИ</div><h2 id="chatChannelTitle">Связь с командой</h2></div>
+          <span class="badge">только чтение</span>
         </div>
         <div class="chat-toolbar">
-          <label><span>Participant</span><select id="chatRecipient" aria-label="Chat participant"></select></label>
-          <label><span>Delivery</span><select id="chatDelivery" aria-label="Message delivery">
-            <option value="auto">Auto: chat or queue</option>
-            <option value="chat">Talk now</option>
-            <option value="nudge">Nudge next work turn</option>
+          <label><span>Участник</span><select id="chatRecipient" aria-label="Участник чата"></select></label>
+          <label><span>Доставка</span><select id="chatDelivery" aria-label="Способ доставки сообщения">
+            <option value="auto">Авто: сразу или в очередь</option>
+            <option value="chat">Поговорить сейчас</option>
+            <option value="nudge">Подсказать на следующий рабочий ход</option>
           </select></label>
         </div>
-        <p id="chatHint" class="chat-hint">Direct chats are read-only. A nudge is durably attached to the participant's next operational work turn.</p>
-        <div id="chatMessages" class="chat-messages"><div class="empty">Choose a participant and send a message.</div></div>
+        <p id="chatHint" class="chat-hint">Прямой разговор работает только на чтение. Подсказка надёжно прикрепляется к следующему рабочему ходу выбранного участника.</p>
+        <div id="chatMessages" class="chat-messages"><div class="empty">Выберите участника и отправьте сообщение.</div></div>
         <form id="chatForm" class="chat-form">
-          <textarea id="chatInput" rows="2" placeholder="Ask, challenge a decision, or queue a steering note for the next turn."></textarea>
-          <button class="primary" type="submit">Send</button>
+          <textarea id="chatInput" rows="2" placeholder="Задайте вопрос, оспорьте решение или оставьте управляющую подсказку на следующий ход."></textarea>
+          <button class="primary" type="submit">Отправить</button>
         </form>
       </article>
     </section>
