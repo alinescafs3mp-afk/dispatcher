@@ -50,4 +50,14 @@ if source.count(old) != 1:
         f"found {source.count(old)} targets"
     )
 source = source.replace(old, new)
+
+compact_assertion = '''assert '"surface":"direct-chat"' in routed[-1]["payload_json"]'''
+spaced_assertion = '''assert '"surface": "direct-chat"' in routed[-1]["payload_json"]'''
+if source.count(compact_assertion) != 1:
+    raise RuntimeError(
+        "legacy Reserve repair payload has an unexpected event assertion shape: "
+        f"found {source.count(compact_assertion)} targets"
+    )
+source = source.replace(compact_assertion, spaced_assertion)
+
 exec(compile(source, "<legacy-reserve-repair-v2>", "exec"))
